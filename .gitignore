@@ -1,0 +1,23 @@
+# Vivado
+*.jou
+*.log
+*.str
+.Xil/
+vivado*.backup.*
+/proj*/
+/*.cache/
+/*.hw/
+/*.ip_user_files/
+/*.runs/
+/*.sim/
+/*.srcs/
+/*.gen/
+
+# gegenereerd door scripts/hsci_hssio_gen.tcl
+hsci_phy_2bank.sv
+hsci_phy_pins.xdc
+
+# lokale werkkopieen van ADI's HDL repo
+/src/
+/prj/
+/zu17/
