@@ -1,0 +1,60 @@
+{
+  "_comment": [
+    "Alles wat je voor de demo kunt kiezen. build_demo.py leest dit, geeft het",
+    "door aan Vivado, en rendert er de RTL uit.",
+    "",
+    "De acht HSCI-pinnen komen overeen met docs/hssio_for_demo.txt:",
+    "  TX bank 69 byte0  -> clk fwd op BYTE0_PIN4/5, data op BYTE0_PIN10/11",
+    "  RX bank 70 byte3  -> data op BYTE3_PIN2/3,    strobe op BYTE3_PIN6/7",
+    "De strobe zit in de andere nibble dan de data; dat mag omdat C20 een",
+    "DBC-pin is en die beide nibbles van zijn byte group klokt."
+  ],
+
+  "part": "xczu17eg-ffvd1760-1-e",
+
+  "hsci": {
+    "data_speed": 1600,
+    "ref_freq": 200.0,
+    "rx_clk_to_data": 4,
+    "force_rate": true,
+    "_force_rate_reden": "speed grade -1 haalt in native mode 1250 Mb/s (DS925); de demo houdt 1600 aan zoals hssio_for_demo.txt, wat voor synthese prima is maar niet voor silicon",
+
+    "tx": {
+      "bank": 69,
+      "clk_p": "R26", "clk_n": "P26",
+      "dat_p": "M27", "dat_n": "M28",
+      "sig_clk_p": "hsci_mosi_clk_p", "sig_clk_n": "hsci_mosi_clk_n",
+      "sig_dat_p": "hsci_mosi_d_p",   "sig_dat_n": "hsci_mosi_d_n"
+    },
+    "rx": {
+      "bank": 70,
+      "clk_p": "C20", "clk_n": "B21",
+      "dat_p": "D20", "dat_n": "C21",
+      "sig_clk_p": "hsci_miso_clk_p", "sig_clk_n": "hsci_miso_clk_n",
+      "sig_dat_p": "hsci_miso_d_p",   "sig_dat_n": "hsci_miso_d_n"
+    }
+  },
+
+  "clocking": {
+    "_comment": "Een differentiele systeemklok op een GC-pin; de MMCM maakt daar de XPLL-referentie en een onafhankelijke AXI-klok uit.",
+    "sys_clk_p": "H20", "sys_clk_n": "H21",
+    "sys_clk_mhz": 200.0,
+    "sys_clk_iostandard": "LVDS",
+    "mmcm_out_ref_mhz": 200.0,
+    "mmcm_out_axi_mhz": 100.0
+  },
+
+  "axi": {
+    "_comment": "De JTAG-AXI draait expres op de MMCM-AXI-klok, niet op hsci_pclk. De axi_clock_converter zet hem over naar hsci_pclk voor axi_hsci.",
+    "addr_width": 18,
+    "data_width": 32
+  },
+
+  "ip_names": {
+    "tx": "hssio_wiz_hsci_tx",
+    "rx": "hssio_wiz_hsci_rx",
+    "mmcm": "hsci_demo_clk",
+    "jtag_axi": "hsci_demo_jtag_axi",
+    "axi_cdc": "hsci_demo_axi_cdc"
+  }
+}

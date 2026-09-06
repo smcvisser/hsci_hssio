@@ -1,0 +1,46 @@
+# GEGENEREERD door demo/build_demo.py uit templates/hsci_demo_srcs.tcl.j2
+#
+# De complete bestandslijst van de demo, in de volgorde waarin Vivado ze wil.
+# Source dit in een (in-memory of echt) project:
+#
+#     create_project hsci_demo ./hsci_demo -part {{ part }}
+#     source demo/generated/hsci_demo_srcs.tcl
+#     set_property top hsci_demo_top [current_fileset]
+#
+# Paden zijn relatief aan de map waarin dit bestand staat.
+
+set _here [file normalize [file dirname [info script]]]
+set _adi  [file normalize [file join $_here {{ adi_rel }}]]
+
+#--- ADI: axi_hsci en zijn ene generieke dependency --------------------------
+add_files -norecurse [list \
+  [file join $_adi common ad_rst.v] \
+  [file join $_adi axi_hsci axi4_lite.sv] \
+  [file join $_adi axi_hsci hsci_master_regs_regs.sv] \
+  [file join $_adi axi_hsci hsci_master_axi_slave.sv] \
+  [file join $_adi axi_hsci hsci_mcore.v] \
+  [file join $_adi axi_hsci hsci_mdec.sv] \
+  [file join $_adi axi_hsci hsci_menc.sv] \
+  [file join $_adi axi_hsci hsci_mfrm_det.v] \
+  [file join $_adi axi_hsci hsci_mlink_ctrl.sv] \
+  [file join $_adi axi_hsci hsci_master_logic.sv] \
+  [file join $_adi axi_hsci hsci_master_top.sv] \
+  [file join $_adi axi_hsci lfsr15_8.v] \
+  [file join $_adi axi_hsci pulse_sync.v] \
+  [file join $_adi axi_hsci axi_hsci.sv]]
+
+# hsci_master_regs_defs.vh wordt met `include gevonden via dit zoekpad
+set_property include_dirs [list [file join $_adi axi_hsci]] [current_fileset]
+
+#--- gegenereerde RTL --------------------------------------------------------
+add_files -norecurse [list \
+  [file join $_here hsci_phy_top.sv] \
+  [file join $_here hsci_demo_top.sv]]
+
+#--- IP ----------------------------------------------------------------------
+{% for ip in [ip_tx, ip_rx, ip_mmcm, ip_jtag, ip_cdc] %}
+read_ip [file join $_here .srcs sources_1 ip {{ ip }} {{ ip }}.xci]
+{% endfor %}
+
+#--- constraints -------------------------------------------------------------
+add_files -fileset constrs_1 -norecurse [file join $_here hsci_demo_pins.xdc]
