@@ -39,6 +39,11 @@ set cfg(tx_dat_n)   "W34"
 # --- link -------------------------------------------------------------------
 set cfg(data_speed) 1600        ;# Mb/s op de draad
 set cfg(ref_freq)   200.000     ;# MHz referentie naar de XPLL
+# LET OP: de wizard accepteert niet elke referentiefrequentie. De toegestane
+# waarden hangen af van data_speed (de PLL moet er met haar M/D-combinaties op
+# uitkomen); 200 MHz is geldig bij 1600 Mb/s, maar NIET bij 1250 -- daar is
+# 156.250 (= 1250/8) de natuurlijke keuze. Zet je een ongeldige waarde, dan
+# noemt de wizard-foutmelding de complete lijst geldige waarden.
 set cfg(clk_source) "BUFG_TO_PLL"   ;# of een bron uit de bank (GC pin)
 
 # Kenmerk van de slave (AD9084), niet van de FPGA. ADI gebruikt 3.
@@ -53,377 +58,37 @@ set cfg(force_rate) 0
 set cfg(ip_tx)      "hsci_hssio_tx"
 set cfg(ip_rx)      "hsci_hssio_rx"
 set cfg(out_dir)    [file normalize [file dirname [info script]]]
-set cfg(busdir_tx)  "3"   ;# getest OK op wizard 3.6
-set cfg(busdir_rx)  "1"   ;# getest OK op wizard 3.6
+set cfg(busdir_tx)  "0"   ;# TX_ONLY -- zie de tabel hieronder
+set cfg(busdir_rx)  "1"   ;# RX_ONLY
 set cfg(probe_only) 0
 
 #-----------------------------------------------------------------------------
-# Maximale LVDS rate in NATIVE mode op HP banks, per speed grade.
+# CONFIG.BUS_DIR is een enum. De tekstlabels staan in component.xml van het IP
+# (C:/Xilinx/<versie>/Vivado/data/ip/xilinx/high_speed_selectio_wiz_v3_6):
 #
-#   Bron: tabel "LVDS Native Mode Performance" in de device datasheet --
-#   DS925 (Zynq US+), DS922 (Kintex US+), DS923 (Virtex US+).
-#   Relevante rij: RX DDR, RX_BITSLICE 1:8  (wij doen 8 bits per hsci_pclk).
-#   De RX-kant is de bindende: TX haalt gelijk of meer.
+#     0  TX_ONLY
+#     1  RX_ONLY
+#     3  TX + RX
+#     2  BIDIR of TX+RX of TX+RX+BIDIR
 #
-#   Native mode is de juiste tabel omdat de High Speed SelectIO Wizard
-#   RX_BITSLICE/TX_BITSLICE + BITSLICE_CONTROL + XPLL gebruikt. Component mode
-#   (zelf een ISERDESE3 instantieren) is een ander, lager pad -- niet van
-#   toepassing hier.
+# Dus 0 voor onze TX-instantie en 1 voor de RX-instantie. Dat is geen detail:
+# in een TX-only instantie met BUS_DIR 3 zet de wizard PLL0_CLK_SOURCE vast op
+# IBUF_TO_PLL en PLL0_INPUT_CLK_FREQ op data_speed/2 (en kiest zelf een
+# klokpin in de bank). Je krijgt dan een instantie die een externe 800 MHz
+# klok op een bankpin verwacht in plaats van je 200 MHz fabric-referentie --
+# stilzwijgend, want die properties zijn in die modus "disabled" en je
+# set_property wordt genegeerd met alleen een WARNING. Zie hsci_verify_props.
 #
-#   Pas op bij het naslaan: 1250 Mb/s staat op twee onafhankelijke plekken in
-#   de datasheet -- als component-mode plafond bij -2/-3, en als native-mode
-#   plafond bij -1. Zelfde getal, andere oorzaak. Native is dus NIET altijd
-#   1600; op -1 zakt ook native naar 1250.
-#
-#   LET OP: deze waarden zijn overgeschreven, NIET opvraagbaar uit Vivado.
-#   Controleer ze voor jouw exacte device en speed grade (incl. L-varianten).
-#   cfg(force_rate) is bedoeld voor het geval deze tabel te conservatief is --
-#   niet om een echte limiet te omzeilen.
+# BUS_DIR 2 klemt bovendien PLL0_DATA_SPEED op (800, 1300) Mb/s.
 #-----------------------------------------------------------------------------
-array set MAX_RATE_HP_NATIVE {
-    -1   1250
-    -1L  1250
-    -1LI 1250
-    -1M  1250
-    -1I  1250
-    -2   1600
-    -2L  1600
-    -2I  1600
-    -2LI 1600
-    -3   1600
-}
 
-#=============================================================================
-# 2. FOUTAFHANDELING
-#=============================================================================
-
-proc hsci_fail {reden {remedie ""}} {
-    puts "\n**** HSCI CONFIGURATIE ONMOGELIJK ****\n"
-    puts "  reden   : $reden"
-    if {$remedie ne ""} { puts "  remedie : $remedie" }
-    puts ""
-    flush stdout
-    error "HSCI: configuratie onmogelijk (zie reden hierboven)"
-}
-
-proc hsci_warn {msg} { puts "  WAARSCHUWING: $msg" }
-
-# get_package_pins en get_iobanks geven NIETS terug in een kaal (in-memory)
-# project -- de device database wordt pas geladen door link_design. Geeft terug
-# of wij het design zelf hebben aangemaakt, zodat we het weer kunnen sluiten.
-proc hsci_load_device {part} {
-    if {[llength [get_package_pins -quiet]] > 0} { return 0 }
-    puts "  device database laden (link_design)..."
-    if {[catch {link_design -part $part -name hsci_pinquery} e]} {
-        hsci_fail "kan de device database niet laden voor '$part': $e" \
-                  "get_package_pins/get_iobanks werken pas na link_design"
-    }
-    if {[llength [get_package_pins -quiet]] == 0} {
-        hsci_fail "link_design gelukt maar er zijn nog steeds geen package pins" \
-                  "is de device support voor dit part geinstalleerd?"
-    }
-    return 1
-}
-
-#=============================================================================
-# 3. PART-ANALYSE
-#=============================================================================
-
-# Alles wat we uit het part-nummer kunnen halen.
-proc hsci_part_info {part} {
-    set p [get_parts -quiet $part]
-    if {[llength $p] != 1} {
-        hsci_fail "part '$part' is niet bekend in deze Vivado-installatie" \
-                  "controleer de spelling, of installeer de device support"
-    }
-    set arch  [get_property -quiet ARCHITECTURE $p]
-    set speed [get_property -quiet SPEED        $p]
-    if {$speed eq ""} {
-        # fallback: uit de partnaam, bv xczu17eg-ffvc1760-2L-e
-        if {[regexp {-([0-9][A-Za-z]*)-[A-Za-z]+$} $part -> s]} {
-            set speed "-$s"
-        } else {
-            hsci_fail "kan de speed grade niet bepalen uit '$part'"
-        }
-    }
-    return [dict create \
-        part    $part \
-        arch    $arch \
-        family  [get_property -quiet FAMILY  $p] \
-        device  [get_property -quiet DEVICE  $p] \
-        package [get_property -quiet PACKAGE $p] \
-        speed   $speed]
-}
-
-# Bepaalt of dit device de High Speed SelectIO Wizard met BITSLICE ondersteunt.
-proc hsci_check_arch {pi} {
-    set arch [dict get $pi arch]
-    if {[string match "versal*" $arch]} {
-        hsci_fail "Versal ($arch) heeft geen BITSLICE/HSSIO" \
-                  "gebruik advanced_io_wizard; zie ADI's versal_hsci_phy.tcl voor de config"
-    }
-    if {[string match "*uplus*" $arch]} { return "UltraScale+" }
-    if {[regexp {^(kintexu|virtexu|zynqu)$} $arch]} {
-        hsci_warn "$arch is UltraScale (niet Plus). Byte groups en BITSLICE zijn gelijk,\
- maar de maximale rate ligt lager -- controleer DS892/DS893."
-        return "UltraScale"
-    }
-    hsci_fail "architectuur '$arch' heeft geen native-mode SelectIO met BITSLICE" \
-              "dit script werkt alleen op UltraScale / UltraScale+ HP banks"
-}
-
-# Harde gate op de gevraagde datarate.
-proc hsci_check_rate {pi rate force} {
-    global MAX_RATE_HP_NATIVE
-    set sg [dict get $pi speed]
-    if {![info exists MAX_RATE_HP_NATIVE($sg)]} {
-        hsci_warn "speed grade '$sg' staat niet in de tabel -- rate niet gecontroleerd.\
- Vul MAX_RATE_HP_NATIVE aan."
-        return
-    }
-    set max $MAX_RATE_HP_NATIVE($sg)
-    if {$rate <= $max} {
-        puts "ok  $rate Mb/s past binnen $max Mb/s voor speed grade $sg"
-        return
-    }
-    if {$force} {
-        hsci_warn "$rate Mb/s > $max Mb/s voor speed grade $sg, maar force_rate=1 -- doorgaan"
-        return
-    }
-    hsci_fail \
-        "gevraagd $rate Mb/s, maar speed grade $sg van [dict get $pi device] haalt in\
- native mode maximaal $max Mb/s (HP bank, LVDS)" \
-        "kies een snellere speed grade, verlaag cfg(data_speed) naar $max of lager\
- (hsci_pclk wordt dan [expr {$max/8.0}] MHz), of zet cfg(force_rate) op 1 als je\
- in de datasheet hebt geverifieerd dat de tabel te conservatief is"
-}
-
-#=============================================================================
-# 4. PIN-ANALYSE
-#=============================================================================
-
-# PIN_FUNC ziet er uit als:  IO_L16P_T2U_N6_QBC_AD3P_65
-#                               ^pair  ^byte+nibble
-#                                          ^index      ^bank
-proc hsci_pin_info {pin} {
-    set pp [get_package_pins -quiet $pin]
-    if {[llength $pp] != 1} {
-        hsci_fail "package pin '$pin' bestaat niet op dit part" \
-                  "controleer de pinnaam tegen het package file"
-    }
-    set func [get_property PIN_FUNC $pp]
-    set bank [get_property BANK     $pp]
-
-    if {![regexp {_T(\d)([LU])_N(\d+)} $func -> byte nib idx]} {
-        hsci_fail "pin $pin ($func) hoort niet bij een byte group" \
-                  "alleen pinnen in een HP byte group kunnen HSSIO doen; PS-, HD- en\
- config-pinnen niet"
-    }
-    if {![regexp {^IO_L(\d+)([PN])_} $func -> pair pn]} {
-        hsci_fail "pin $pin ($func) is geen differentieel pin" \
-                  "HSCI is LVDS; kies een pin uit een L-paar"
-    }
-
-    return [dict create \
-        pin $pin  func $func  bank $bank \
-        byte $byte  nibl $nib  idx $idx  pair $pair  pn $pn \
-        nib   [expr {$nib eq "U" ? 1 : 0}] \
-        bsc   [expr {$byte * 2 + ($nib eq "U" ? 1 : 0)}] \
-        slice [expr {$byte * 13 + $idx}] \
-        clkcap [regexp {_(QBC|DBC)_} $func]]
-}
-
-proc hsci_fmt {d} {
-    return [format "%-6s bank %-3s byte%s%s N%-2s bsc%-2s slice%-3s %s" \
-        [dict get $d pin]  [dict get $d bank] [dict get $d byte] \
-        [dict get $d nibl] [dict get $d idx]  [dict get $d bsc]  \
-        [dict get $d slice] [dict get $d func]]
-}
-
-proc hsci_check_pair {label p n} {
-    foreach {k wat} {bank "bank" byte "byte group" nib "nibble" pair "L-paar"} {
-        if {[dict get $p $k] != [dict get $n $k]} {
-            hsci_fail "$label: [dict get $p pin] en [dict get $n pin] zitten niet in\
- hetzelfde $wat, dus vormen geen differentieel paar" \
-                      "gebruik de P- en N-kant van een en hetzelfde L-paar"
-        }
-    }
-    if {[dict get $p pn] ne "P" || [dict get $n pn] ne "N"} {
-        hsci_fail "$label: P/N verwisseld -- [dict get $p pin] is de\
- [dict get $p pn]-kant, [dict get $n pin] de [dict get $n pn]-kant" \
-                  "draai de twee pinnen om in de config"
-    }
-}
-
-proc hsci_check_bank_hp {bank wat} {
-    set b [get_iobanks -quiet $bank]
-    if {$b eq ""} { hsci_fail "bank $bank bestaat niet op dit package" }
-    set t [get_property BANK_TYPE $b]
-    if {$t ne "BT_HIGH_PERFORMANCE"} {
-        hsci_fail "$wat zit in bank $bank, en dat is een $t bank" \
-                  "BITSLICE/HSSIO bestaat alleen in HP banks (BT_HIGH_PERFORMANCE);\
- verplaats de signalen naar een HP bank"
-    }
-}
-
-# Volledige pin-tabel van een bank: byte,idx -> {pinnaam pin_func}
-proc hsci_bank_pin_table {bank} {
-    set tbl [dict create]
-    foreach pp [get_package_pins -quiet -filter "BANK == $bank"] {
-        set func [get_property PIN_FUNC $pp]
-        if {![regexp {_T(\d)([LU])_N(\d+)} $func -> byte nib idx]} { continue }
-        dict set tbl $byte,$idx [list [get_property NAME $pp] $func]
-    }
-    return $tbl
-}
-
-#=============================================================================
-# 5. PORT MAP VOORSPELLEN
-#
-#  Afgeleid uit ADI's werkende vcu118-combinatie (system_project.tcl config
-#  <-> hsci_phy_top.sv instantiatie). De regels:
-#
-#    pad-poort            = SIGNAL_NAME                    (APPEND_PIN_NO=0)
-#    fabric-poort TX      = data_from_fabric_<SIGNAL_NAME>
-#    fabric-poort RX      = data_to_fabric_<SIGNAL_NAME>
-#    bitslice control     = {dly_rdy,vtc_rdy,en_vtc}_bsc<byte*2 + nibble>
-#    per-bitslice FIFO    = {fifo_rd_clk,fifo_rd_en,fifo_empty}_<byte*13 + idx>
-#    PLL / reset          = clk, rst, pll0_locked, pll0_clkout0, rst_seq_done
-#
-#  Controle op ADI: byte2 pin6 -> slice 32, pin8 -> slice 34 (klopt met hun
-#  fifo_rd_en_34), byte0 nib0 -> bsc0, byte0 nib1 -> bsc1, byte2 nib1 -> bsc5.
-#
-#  Deze voorspelling wordt verderop machinaal getoetst aan de .veo template.
-#=============================================================================
-
-proc hsci_predict_tx {bsc_list} {
-    set p [list clk rst pll0_locked pll0_clkout0 rst_seq_done \
-                data_out_p data_out_n data_from_fabric_data_out_p \
-                clk_out_p clk_out_n data_from_fabric_clk_out_p]
-    foreach b $bsc_list { lappend p dly_rdy_bsc$b vtc_rdy_bsc$b en_vtc_bsc$b }
-    return $p
-}
-
-proc hsci_predict_rx {bsc slice_c slice_d} {
-    return [list clk rst pll0_locked pll0_clkout0 rst_seq_done \
-        dly_rdy_bsc$bsc vtc_rdy_bsc$bsc en_vtc_bsc$bsc \
-        clk_in_p clk_in_n data_to_fabric_clk_in_p \
-        data_in_p data_in_n data_to_fabric_data_in_p \
-        fifo_rd_clk_$slice_c fifo_rd_en_$slice_c fifo_empty_$slice_c \
-        fifo_rd_clk_$slice_d fifo_rd_en_$slice_d fifo_empty_$slice_d]
-}
-
-#=============================================================================
-# 6. IP-HELPERS
-#=============================================================================
-
-proc hsci_pin_props {byte idx signame {strobe ""} {busdir ""} {init ""}} {
-    set l [list]
-    lappend l CONFIG.ENABLE_BYTE${byte}_PIN${idx}      {true}
-    lappend l CONFIG.BYTE${byte}_PIN${idx}_SIGNAL_NAME $signame
-    lappend l CONFIG.BYTE${byte}_PIN${idx}_SIG_TYPE    {DIFF}
-    if {$strobe ne ""} { lappend l CONFIG.BYTE${byte}_PIN${idx}_DATA_STROBE $strobe }
-    if {$busdir ne ""} { lappend l CONFIG.BYTE${byte}_PIN${idx}_BUS_DIR     $busdir }
-    if {$init   ne ""} { lappend l CONFIG.BYTE${byte}_PIN${idx}_INIT        $init   }
-    return $l
-}
-
-# Zet LOC + NAME voor alle 13 pinnen van elke byte group die we aanraken,
-# zoals ADI doet. Voorkomt dat we afhankelijk zijn van afleiding uit BANK.
-proc hsci_bytegroup_props {bank bytes} {
-    set tbl [hsci_bank_pin_table $bank]
-    set l [list]
-    foreach byte $bytes {
-        for {set i 0} {$i < 13} {incr i} {
-            if {![dict exists $tbl $byte,$i]} { continue }
-            lassign [dict get $tbl $byte,$i] pname pfunc
-            lappend l CONFIG.BYTE${byte}_PIN${i}_LOC  $pname
-            lappend l CONFIG.BYTE${byte}_PIN${i}_NAME $pfunc
-        }
-    }
-    return $l
-}
-
-# Bouwt "zet elke pin uit die wij niet gebruiken". De wizard heeft standaard
-# BYTE2_PIN0 (signaalnaam 'clk', botst met de IP-klok) en BYTE3_PIN12 aan
-# staan; laat je die staan, dan faalt de validatie met meldingen over byte
-# groups die je nooit hebt aangeraakt. ADI doet dit ook expliciet.
-proc hsci_disable_unused {ip keep} {
-    set l [list]
-    foreach p [lsearch -all -inline -glob [list_property $ip] CONFIG.ENABLE_BYTE?_PIN*] {
-        if {![regexp {ENABLE_BYTE(\d)_PIN(\d+)$} $p -> b i]} { continue }
-        if {[lsearch -exact $keep "$b,$i"] >= 0} { continue }
-        lappend l $p {false}
-    }
-    return $l
-}
-
-proc hsci_create_ip {name props keep} {
-    if {[llength [get_ips -quiet $name]]} {
-        puts "  -- bestaande IP '$name' wordt vervangen"
-        remove_files [get_files -quiet ${name}.xci]
-    }
-    # Versie niet pinnen. Op Vivado 2026.1 is het nog steeds 3.6, gelijk aan ADI.
-    create_ip -name high_speed_selectio_wiz -vendor xilinx.com -library ip \
-              -module_name $name
-    set ip [get_ips $name]
-
-    # Alles in EEN set_property -dict. Property-voor-property werkt niet: de
-    # wizard valideert na elke losse property en struikelt dan over een
-    # inconsistente tussentoestand (pin enabled terwijl zijn BUS_DIR nog op de
-    # default RX staat -> "RX and TX cannot be combined in same nibble").
-    set full [concat [hsci_disable_unused $ip $keep] $props]
-    if {[catch {set_property -dict $full $ip} err]} {
-        hsci_fail "de wizard weigert deze configuratie voor '$name':\n            $err" \
-                  "de wizard-melding hierboven noemt meestal de precieze regel\
- (nibble-indeling, strobe-positie, poortnaam-botsing)"
-    }
-
-    # Rate-terugkoppeling: als de wizard klemt, weten we dat het part het niet trekt.
-    set got [get_property -quiet CONFIG.PLL0_DATA_SPEED $ip]
-    set want [dict get [dict create {*}$props] CONFIG.PLL0_DATA_SPEED]
-    if {$got ne "" && [expr {abs($got - $want)}] > 0.01} {
-        hsci_fail "wizard klemde PLL0_DATA_SPEED van $want naar $got Mb/s" \
-                  "dit part haalt de gevraagde rate niet; verlaag cfg(data_speed) naar $got"
-    }
-    return $ip
-}
-
-proc hsci_veo_ports {ip} {
-    set f [get_files -quiet -all "*${ip}.veo"]
-    if {[llength $f] == 0} {
-        set dir [get_property -quiet IP_DIR [get_ips $ip]]
-        if {$dir ne ""} { set f [glob -nocomplain -directory $dir *.veo] }
-    }
-    set f [lsearch -all -inline -glob $f "*.veo"]
-    if {[llength $f] == 0 || ![file readable [lindex $f 0]]} { return {} }
-    set fh [open [lindex $f 0] r]
-    set txt [read $fh]
-    close $fh
-    set ports [list]
-    foreach {all p} [regexp -all -inline {\.([A-Za-z_][A-Za-z0-9_]*)\s*\(} $txt] {
-        lappend ports $p
-    }
-    return [lsort -unique $ports]
-}
-
-proc hsci_check_ports {ip wanted} {
-    set have [hsci_veo_ports $ip]
-    if {[llength $have] == 0} {
-        hsci_warn "geen .veo gevonden voor $ip -- poortnamen NIET geverifieerd"
-        return 0
-    }
-    set miss [list]
-    foreach p $wanted { if {[lsearch -exact $have $p] < 0} { lappend miss $p } }
-    if {[llength $miss] == 0} {
-        puts "  ok $ip : alle [llength $wanted] voorspelde poorten bestaan"
-        return 1
-    }
-    puts "  !! $ip : [llength $miss] voorspelde poort(en) bestaan NIET:"
-    foreach p $miss { puts "       $p" }
-    puts "     wizard biedt: [join $have {, }]"
-    return 0
-}
+#-----------------------------------------------------------------------------
+# De part-/pin-analyse, de regelchecks, de port-map-voorspelling en het
+# aanmaken van de wizard-IPs staan in hsci_hssio_lib.tcl, zodat de demo in
+# demo/ dezelfde motor gebruikt. Daar staat ook de tabel MAX_RATE_HP_NATIVE
+# met de maximale LVDS-rate per speed grade.
+#-----------------------------------------------------------------------------
+source [file join [file dirname [info script]] hsci_hssio_lib.tcl]
 
 #=============================================================================
 # 7. MAIN
@@ -471,34 +136,18 @@ hsci_check_bank_hp $rx_bank "RX"
 hsci_check_bank_hp $tx_bank "TX"
 puts "ok  bank $rx_bank (RX) en bank $tx_bank (TX) zijn HP banks"
 
-if {[dict get $rxdp bank] != $rx_bank} {
-    hsci_fail "RX data zit in bank [dict get $rxdp bank] en de strobe in bank $rx_bank" \
-              "strobe en data moeten in dezelfde bank -- sterker nog, in dezelfde nibble"
-}
 if {[dict get $txdp bank] != $tx_bank} {
     hsci_fail "TX data zit in bank [dict get $txdp bank] en de clkfwd in bank $tx_bank" \
               "beide moeten in dezelfde byte group van dezelfde bank"
 }
 
-if {[dict get $rxcp byte] != [dict get $rxdp byte] ||
-    [dict get $rxcp nib]  != [dict get $rxdp nib]} {
-    hsci_fail "RX strobe zit in byte[dict get $rxcp byte][dict get $rxcp nibl] en de\
- data in byte[dict get $rxdp byte][dict get $rxdp nibl]" \
-              "de RX_BITSLICE wordt geklokt door de BITSLICE_CONTROL van zijn eigen\
- nibble; strobe en data MOETEN in dezelfde nibble"
+set rx_bsc_list [hsci_check_rx_group $rxcp $rxdp]
+puts "ok  RX strobe + data in byte group [dict get $rxcp byte] van bank $rx_bank"
+puts "ok  RX strobe op [dict get $rxcp clkcap] pin (bsc [join $rx_bsc_list {, }])"
+if {[llength $rx_bsc_list] > 1} {
+    puts "    strobe in byte[dict get $rxcp byte][dict get $rxcp nibl], data in\
+ byte[dict get $rxdp byte][dict get $rxdp nibl] -- twee BITSLICE_CONTROLs"
 }
-puts "ok  RX strobe + data in byte[dict get $rxcp byte][dict get $rxcp nibl] (bsc[dict get $rxcp bsc])"
-
-if {![dict get $rxcp clkcap]} {
-    hsci_fail "RX strobe [dict get $rxcp pin] is geen QBC/DBC pin ([dict get $rxcp func])" \
-              "de strobe moet op het N0/N1- of N6/N7-paar van de nibble; die zijn als\
- DBC of QBC gemarkeerd in de pinnaam"
-}
-if {[dict get $rxcp idx] != 0 && [dict get $rxcp idx] != 6} {
-    hsci_fail "RX strobe staat op N[dict get $rxcp idx]" \
-              "de P-kant van een DBC/QBC paar is N0 of N6"
-}
-puts "ok  RX strobe op [lindex [regexp -inline {QBC|DBC} [dict get $rxcp func]] 0] pin"
 
 if {[dict get $txcp byte] != [dict get $txdp byte]} {
     hsci_fail "TX clkfwd zit in byte group [dict get $txcp byte] en de data in\
@@ -519,7 +168,6 @@ set fwd_clk_ns  [format %.3f [expr {1000.0 / $fwd_clk_mhz}]]
 set tx_bsc_list [lsort -unique -integer [list [dict get $txcp bsc] [dict get $txdp bsc]]]
 set tx_bytes    [lsort -unique -integer [list [dict get $txcp byte] [dict get $txdp byte]]]
 set rx_bytes    [lsort -unique -integer [list [dict get $rxcp byte] [dict get $rxdp byte]]]
-set rx_bsc      [dict get $rxcp bsc]
 set rx_slice_d  [dict get $rxdp slice]
 set rx_slice_c  [dict get $rxcp slice]
 
@@ -528,11 +176,11 @@ puts "  data rate       : $cfg(data_speed) Mb/s"
 puts "  hsci_pclk       : $pclk_freq MHz"
 puts "  forwarded clock : $fwd_clk_mhz MHz (periode $fwd_clk_ns ns)"
 puts "  TX bank / bsc   : $tx_bank / [join $tx_bsc_list {, }]"
-puts "  RX bank / bsc   : $rx_bank / $rx_bsc"
+puts "  RX bank / bsc   : $rx_bank / [join $rx_bsc_list {, }]"
 puts "  RX fifo slices  : data=$rx_slice_d strobe=$rx_slice_c"
 
 set tx_ports [hsci_predict_tx $tx_bsc_list]
-set rx_ports [hsci_predict_rx $rx_bsc $rx_slice_c $rx_slice_d]
+set rx_ports [hsci_predict_rx $rx_bsc_list $rx_slice_c $rx_slice_d]
 
 puts "\n===== VOORSPELDE PORT MAP ======================================="
 puts "  $cfg(ip_tx) ([llength $tx_ports]) : [join $tx_ports {, }]"
@@ -618,7 +266,7 @@ set tmpl {// GEGENEREERD door hsci_hssio_gen.tcl -- niet met de hand aanpassen.
 //   part      : @PART@   (speed grade @SPEED@)
 //   data rate : @RATE@ Mb/s   ->  hsci_pclk = @PCLK@ MHz
 //   TX        : bank @TXBANK@, byte group @TXBYTE@, bsc @TXBSCS@
-//   RX        : bank @RXBANK@, byte @RXBYTE@@RXNIB@, bsc @RXBSC@,
+//   RX        : bank @RXBANK@, byte @RXBYTE@@RXNIB@, bsc @RXBSCS@,
 //               fifo slice data=@SLICED@ strobe=@SLICEC@
 `timescale 1ps/1ps
 
@@ -657,7 +305,7 @@ module hsci_phy_2bank (
   logic       seq_done_tx, seq_done_rx;
   logic       fifo_empty_dat, fifo_empty_str;
   logic       rx_pclk_unused;
-@TXDECL@  logic       dly_rdy_bsc@RXBSC@, vtc_rdy_bsc@RXBSC@;
+@TXDECL@@RXDECL@
 
   // Bitvolgorde omdraaien tussen axi_hsci en de serializer (zoals ADI).
   assign mosi_data_br = {hsci_mosi_data[0], hsci_mosi_data[1], hsci_mosi_data[2], hsci_mosi_data[3],
@@ -675,8 +323,8 @@ module hsci_phy_2bank (
   assign rst_seq_done    = seq_done_tx & seq_done_rx;
   assign dly_rdy_bsc_tx  = @TXDLY@;
   assign vtc_rdy_bsc_tx  = @TXVTC@;
-  assign dly_rdy_bsc_rx  = dly_rdy_bsc@RXBSC@;
-  assign vtc_rdy_bsc_rx  = vtc_rdy_bsc@RXBSC@;
+  assign dly_rdy_bsc_rx  = @RXDLY@;
+  assign vtc_rdy_bsc_rx  = @RXVTC@;
 
   //------------------------------------------------------------------ TX ---
   @IPTX@ i_hssio_tx (
@@ -702,10 +350,7 @@ module hsci_phy_2bank (
     .pll0_locked                 (locked_rx),
     .pll0_clkout0                (rx_pclk_unused),
     .rst_seq_done                (seq_done_rx),
-    .dly_rdy_bsc@RXBSC@                (dly_rdy_bsc@RXBSC@),
-    .vtc_rdy_bsc@RXBSC@                (vtc_rdy_bsc@RXBSC@),
-    .en_vtc_bsc@RXBSC@                 (1'b1),
-    .clk_in_p                    (hsci_miso_clk_p),
+@RXCONN@    .clk_in_p                    (hsci_miso_clk_p),
     .clk_in_n                    (hsci_miso_clk_n),
     .data_to_fabric_clk_in_p     (miso_clk_br),
     .data_in_p                   (hsci_miso_d_p),
@@ -719,9 +364,9 @@ endmodule
 set tx_decl ""
 set tx_conn ""
 foreach b $tx_bsc_list {
-    append tx_decl "  logic       dly_rdy_bsc${b}, vtc_rdy_bsc${b};\n"
-    append tx_conn "    .dly_rdy_bsc${b}                (dly_rdy_bsc${b}),\n"
-    append tx_conn "    .vtc_rdy_bsc${b}                (vtc_rdy_bsc${b}),\n"
+    append tx_decl "  logic       tx_dly_rdy_bsc${b}, tx_vtc_rdy_bsc${b};\n"
+    append tx_conn "    .dly_rdy_bsc${b}                (tx_dly_rdy_bsc${b}),\n"
+    append tx_conn "    .vtc_rdy_bsc${b}                (tx_vtc_rdy_bsc${b}),\n"
     append tx_conn "    .en_vtc_bsc${b}                 (1'b1),\n"
 }
 
@@ -733,9 +378,28 @@ append fifo_conn [format "    %-28s (hsci_pclk),\n"      ".fifo_rd_clk_$rx_slice
 append fifo_conn [format "    %-28s (!fifo_empty_dat & rst_seq_done),\n" ".fifo_rd_en_$rx_slice_d"]
 append fifo_conn [format "    %-28s (fifo_empty_dat));"  ".fifo_empty_$rx_slice_d"]
 
+# De RX-kant kan net als de TX-kant meer dan een BITSLICE_CONTROL hebben: dat
+# gebeurt zodra de strobe in de andere nibble van de byte group zit dan de data
+# (mag, want een DBC-pin klokt beide nibbles).
+set rx_decl ""
+set rx_conn ""
+foreach b $rx_bsc_list {
+    append rx_decl "  logic       rx_dly_rdy_bsc${b}, rx_vtc_rdy_bsc${b};\n"
+    append rx_conn "    .dly_rdy_bsc${b}                (rx_dly_rdy_bsc${b}),\n"
+    append rx_conn "    .vtc_rdy_bsc${b}                (rx_vtc_rdy_bsc${b}),\n"
+    append rx_conn "    .en_vtc_bsc${b}                 (1'b1),\n"
+}
+
 set tx_dly [list] ; set tx_vtc [list]
 foreach b $tx_bsc_list {
-    lappend tx_dly "dly_rdy_bsc${b}" ; lappend tx_vtc "vtc_rdy_bsc${b}"
+    lappend tx_dly "tx_dly_rdy_bsc${b}" ; lappend tx_vtc "tx_vtc_rdy_bsc${b}"
+}
+# de laatste newline weg: de template zet er zelf al een achter
+set rx_decl [string trimright $rx_decl "\n"]
+
+set rx_dly [list] ; set rx_vtc [list]
+foreach b $rx_bsc_list {
+    lappend rx_dly "rx_dly_rdy_bsc${b}" ; lappend rx_vtc "rx_vtc_rdy_bsc${b}"
 }
 
 set out [string map [list \
@@ -745,12 +409,14 @@ set out [string map [list \
     @IPTX@   $cfg(ip_tx)             @IPRX@   $cfg(ip_rx)      \
     @TXBANK@ $tx_bank                @RXBANK@ $rx_bank         \
     @TXBYTE@ [dict get $txdp byte]   @RXBYTE@ [dict get $rxdp byte] \
-    @RXNIB@  [dict get $rxdp nibl]   @RXBSC@  $rx_bsc          \
-    @TXBSCS@ [join $tx_bsc_list ", "]                          \
+    @RXNIB@  [dict get $rxdp nibl]                             \
+    @TXBSCS@ [join $tx_bsc_list ", "] @RXBSCS@ [join $rx_bsc_list ", "] \
     @SLICED@ $rx_slice_d             @SLICEC@ $rx_slice_c      \
     @TXDECL@ $tx_decl                @TXCONN@ $tx_conn         \
+    @RXDECL@ $rx_decl                @RXCONN@ $rx_conn         \
     @FIFOCONN@ $fifo_conn                                      \
     @TXDLY@  [join $tx_dly " & "]    @TXVTC@  [join $tx_vtc " & "] \
+    @RXDLY@  [join $rx_dly " & "]    @RXVTC@  [join $rx_vtc " & "] \
     ] $tmpl]
 
 set path [file join $cfg(out_dir) hsci_phy_2bank.sv]
