@@ -1,0 +1,48 @@
+# GEGENEREERD door demo/build_demo.py uit templates/hsci_demo_pins.xdc.j2
+# part {{ part }} ({{ speed_grade }}), {{ data_speed }} Mb/s
+#
+# LVDS in HP banks vereist VCCO = 1.8 V. Dat geldt hier voor bank {{ tx_bank }} (TX),
+# bank {{ rx_bank }} (RX) en de bank van de systeemklok. Vivado kan dat niet voor je
+# controleren -- kijk het na in je schema.
+
+#=============================================================================
+# Systeemklok, {{ sys_clk_mhz }} MHz
+#=============================================================================
+set_property -dict {PACKAGE_PIN {{ sys_clk_p }} IOSTANDARD {{ sys_clk_iostandard }}} [get_ports {{ sys_clk_p }}]
+set_property -dict {PACKAGE_PIN {{ sys_clk_n }} IOSTANDARD {{ sys_clk_iostandard }}} [get_ports {{ sys_clk_n }}]
+create_clock -name sys_clk -period {{ '%.3f'|format(1000.0 / sys_clk_mhz) }} [get_ports {{ sys_clk_p }}]
+
+#=============================================================================
+# HSCI TX : FPGA -> MxFE   (bank {{ tx_bank }}, byte group {{ pins.tx_dat_p.byte }})
+#=============================================================================
+# forwarded clock, {{ fwd_clk_mhz }} MHz
+set_property -dict {PACKAGE_PIN {{ pins.tx_clk_p.pin }} IOSTANDARD LVDS} [get_ports {{ tx_sig_clk_p }}] ; # {{ pins.tx_clk_p.func }}
+set_property -dict {PACKAGE_PIN {{ pins.tx_clk_n.pin }} IOSTANDARD LVDS} [get_ports {{ tx_sig_clk_n }}] ; # {{ pins.tx_clk_n.func }}
+# MOSI
+set_property -dict {PACKAGE_PIN {{ pins.tx_dat_p.pin }} IOSTANDARD LVDS} [get_ports {{ tx_sig_dat_p }}] ; # {{ pins.tx_dat_p.func }}
+set_property -dict {PACKAGE_PIN {{ pins.tx_dat_n.pin }} IOSTANDARD LVDS} [get_ports {{ tx_sig_dat_n }}] ; # {{ pins.tx_dat_n.func }}
+
+#=============================================================================
+# HSCI RX : MxFE -> FPGA   (bank {{ rx_bank }}, byte group {{ pins.rx_dat_p.byte }})
+#=============================================================================
+# strobe op een DBC-pin in byte{{ pins.rx_clk_p.byte }}{{ pins.rx_clk_p.nibl }} (bsc {{ pins.rx_clk_p.bsc }}),
+# data in byte{{ pins.rx_dat_p.byte }}{{ pins.rx_dat_p.nibl }} (bsc {{ pins.rx_dat_p.bsc }})
+set_property -dict {PACKAGE_PIN {{ pins.rx_clk_p.pin }} IOSTANDARD LVDS DIFF_TERM_ADV TERM_100} [get_ports {{ rx_sig_clk_p }}] ; # {{ pins.rx_clk_p.func }}
+set_property -dict {PACKAGE_PIN {{ pins.rx_clk_n.pin }} IOSTANDARD LVDS DIFF_TERM_ADV TERM_100} [get_ports {{ rx_sig_clk_n }}] ; # {{ pins.rx_clk_n.func }}
+set_property -dict {PACKAGE_PIN {{ pins.rx_dat_p.pin }} IOSTANDARD LVDS DIFF_TERM_ADV TERM_100} [get_ports {{ rx_sig_dat_p }}] ; # {{ pins.rx_dat_p.func }}
+set_property -dict {PACKAGE_PIN {{ pins.rx_dat_n.pin }} IOSTANDARD LVDS DIFF_TERM_ADV TERM_100} [get_ports {{ rx_sig_dat_n }}] ; # {{ pins.rx_dat_n.func }}
+
+# De strobe die de MxFE terugstuurt is afgeleid van onze forwarded clock en
+# loopt dus op dezelfde {{ fwd_clk_mhz }} MHz.
+create_clock -name hsci_strobe -period {{ '%.3f'|format(1000.0 / fwd_clk_mhz) }} [get_ports {{ rx_sig_clk_p }}]
+
+#=============================================================================
+# Klokdomeinen
+#=============================================================================
+# De JTAG-AXI ({{ axi_clk_mhz }} MHz) en hsci_pclk ({{ pclk_mhz }} MHz) komen allebei uit
+# {{ ip_mmcm }} respectievelijk de XPLL van de TX-wizard. Ze zijn niet
+# gerelateerd voor timing-doeleinden; {{ ip_cdc }} doet de overgang en
+# heeft zijn eigen constraints in zijn IP-XDC.
+set_clock_groups -asynchronous \
+  -group [get_clocks -include_generated_clocks -of_objects [get_ports {{ sys_clk_p }}]] \
+  -group [get_clocks -include_generated_clocks -of_objects [get_ports {{ rx_sig_clk_p }}]]

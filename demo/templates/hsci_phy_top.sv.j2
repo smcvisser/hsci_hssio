@@ -1,0 +1,154 @@
+// ***************************************************************************
+//  hsci_phy_top.sv -- GEGENEREERD door demo/build_demo.py
+//  Bron: demo/templates/hsci_phy_top.sv.j2 + demo/generated/hsci_facts.json
+//  Niet met de hand aanpassen; pas de template of demo_config.json aan.
+//
+//    part       : {{ part }}  (speed grade {{ speed_grade }})
+//    data rate  : {{ data_speed }} Mb/s  ->  hsci_pclk = {{ pclk_mhz }} MHz,
+//                 forwarded clock {{ fwd_clk_mhz }} MHz
+//    TX         : bank {{ tx_bank }}, byte group {{ pins.tx_dat_p.byte }},
+//                 bsc {{ tx_bsc | join(', ') }}
+//                 clkfwd {{ pins.tx_clk_p.pin }}/{{ pins.tx_clk_n.pin }}
+//                 ({{ pins.tx_clk_p.func }})
+//                 data   {{ pins.tx_dat_p.pin }}/{{ pins.tx_dat_n.pin }}
+//                 ({{ pins.tx_dat_p.func }})
+//    RX         : bank {{ rx_bank }}, byte group {{ pins.rx_dat_p.byte }},
+//                 bsc {{ rx_bsc | join(', ') }}
+//                 strobe {{ pins.rx_clk_p.pin }}/{{ pins.rx_clk_n.pin }}
+//                 ({{ pins.rx_clk_p.func }})
+//                 data   {{ pins.rx_dat_p.pin }}/{{ pins.rx_dat_n.pin }}
+//                 ({{ pins.rx_dat_p.func }})
+//                 fifo slice strobe={{ rx_slice_strobe }} data={{ rx_slice_data }}
+//
+//  De poorten zijn exact wat ADI's axi_hsci aan de PHY-kant verwacht:
+//  hsci_pclk, hsci_menc_clk, hsci_mosi_data, hsci_miso_data, hsci_pll_reset,
+//  hsci_pll_locked, hsci_rst_seq_done en de vier vtc/dly_rdy statuslijnen.
+{% if rx_bsc | length > 1 %}
+//
+//  De RX-strobe zit in byte{{ pins.rx_clk_p.byte }}{{ pins.rx_clk_p.nibl }} en de
+//  data in byte{{ pins.rx_dat_p.byte }}{{ pins.rx_dat_p.nibl }} -- verschillende
+//  nibbles, wat mag omdat {{ pins.rx_clk_p.pin }} een DBC-pin is en die beide
+//  nibbles van zijn byte group klokt. Gevolg: twee BITSLICE_CONTROLs aan de
+//  RX-kant, waarvan de status geAND wordt naar axi_hsci.
+{% endif %}
+// ***************************************************************************
+
+`timescale 1ps/1ps
+
+module hsci_phy_top (
+  // XPLL-referentie ({{ ref_freq }} MHz) en de reset uit axi_hsci
+  input  wire        pll_inclk,
+  input  wire        hsci_pll_reset,
+
+  // richting axi_hsci
+  output logic       hsci_pclk,
+  output logic       hsci_pll_locked,
+  output logic       rst_seq_done,
+
+  // LVDS pads, FPGA -> MxFE
+  output logic       {{ tx_sig_clk_p }},
+  output logic       {{ tx_sig_clk_n }},
+  output logic       {{ tx_sig_dat_p }},
+  output logic       {{ tx_sig_dat_n }},
+
+  // LVDS pads, MxFE -> FPGA
+  input  wire        {{ rx_sig_clk_p }},
+  input  wire        {{ rx_sig_clk_n }},
+  input  wire        {{ rx_sig_dat_p }},
+  input  wire        {{ rx_sig_dat_n }},
+
+  // fabric-kant van axi_hsci
+  input  wire  [7:0] hsci_menc_clk,
+  input  wire  [7:0] hsci_mosi_data,
+  output logic [7:0] hsci_miso_data,
+
+  // status naar het HSCI_PHY_STATUS register
+  output logic       vtc_rdy_bsc_tx,
+  output logic       dly_rdy_bsc_tx,
+  output logic       vtc_rdy_bsc_rx,
+  output logic       dly_rdy_bsc_rx
+);
+
+  logic [7:0] mosi_data_br, menc_clk_br, miso_data_br, miso_clk_br;
+  logic       locked_tx, locked_rx;
+  logic       seq_done_tx, seq_done_rx;
+  logic       fifo_empty_dat, fifo_empty_str;
+  logic       rx_pclk_unused;
+{% for b in tx_bsc %}
+  logic       tx_dly_rdy_bsc{{ b }}, tx_vtc_rdy_bsc{{ b }};
+{% endfor %}
+{% for b in rx_bsc %}
+  logic       rx_dly_rdy_bsc{{ b }}, rx_vtc_rdy_bsc{{ b }};
+{% endfor %}
+
+  // Bitvolgorde omdraaien tussen axi_hsci en de serializer, zoals ADI's
+  // hsci_phy_top.sv. Sla dit over en de link komt nooit op.
+  assign mosi_data_br = {hsci_mosi_data[0], hsci_mosi_data[1], hsci_mosi_data[2], hsci_mosi_data[3],
+                         hsci_mosi_data[4], hsci_mosi_data[5], hsci_mosi_data[6], hsci_mosi_data[7]};
+  assign menc_clk_br  = {hsci_menc_clk[0],  hsci_menc_clk[1],  hsci_menc_clk[2],  hsci_menc_clk[3],
+                         hsci_menc_clk[4],  hsci_menc_clk[5],  hsci_menc_clk[6],  hsci_menc_clk[7]};
+
+  assign hsci_miso_data = rst_seq_done
+      ? {miso_data_br[0], miso_data_br[1], miso_data_br[2], miso_data_br[3],
+         miso_data_br[4], miso_data_br[5], miso_data_br[6], miso_data_br[7]}
+      : 8'h00;
+
+  // axi_hsci wil een gecombineerd beeld over beide banks
+  assign hsci_pll_locked = locked_tx   & locked_rx;
+  assign rst_seq_done    = seq_done_tx & seq_done_rx;
+  assign dly_rdy_bsc_tx  = {% for b in tx_bsc %}tx_dly_rdy_bsc{{ b }}{{ " & " if not loop.last }}{% endfor %};
+  assign vtc_rdy_bsc_tx  = {% for b in tx_bsc %}tx_vtc_rdy_bsc{{ b }}{{ " & " if not loop.last }}{% endfor %};
+  assign dly_rdy_bsc_rx  = {% for b in rx_bsc %}rx_dly_rdy_bsc{{ b }}{{ " & " if not loop.last }}{% endfor %};
+  assign vtc_rdy_bsc_rx  = {% for b in rx_bsc %}rx_vtc_rdy_bsc{{ b }}{{ " & " if not loop.last }}{% endfor %};
+
+  //------------------------------------------------------------------ TX ---
+  // bank {{ tx_bank }}, BUS_DIR 0 (TX_ONLY): de XPLL loopt op de {{ ref_freq }} MHz
+  // fabric-referentie en levert hsci_pclk op clkout0.
+  {{ ip_tx }} i_hssio_tx (
+    .clk                              (pll_inclk),
+    .rst                              (hsci_pll_reset),
+    .pll0_locked                      (locked_tx),
+    .pll0_clkout0                     (hsci_pclk),
+    .rst_seq_done                     (seq_done_tx),
+{% for b in tx_bsc %}
+    .dly_rdy_bsc{{ b }}                     (tx_dly_rdy_bsc{{ b }}),
+    .vtc_rdy_bsc{{ b }}                     (tx_vtc_rdy_bsc{{ b }}),
+    .en_vtc_bsc{{ b }}                      (1'b1),
+{% endfor %}
+    .{{ "%-32s"|format(tx_sig_clk_p) }}({{ tx_sig_clk_p }}),
+    .{{ "%-32s"|format(tx_sig_clk_n) }}({{ tx_sig_clk_n }}),
+    .data_from_fabric_{{ "%-14s"|format(tx_sig_clk_p) }}(menc_clk_br),
+    .{{ "%-32s"|format(tx_sig_dat_p) }}({{ tx_sig_dat_p }}),
+    .{{ "%-32s"|format(tx_sig_dat_n) }}({{ tx_sig_dat_n }}),
+    .data_from_fabric_{{ "%-14s"|format(tx_sig_dat_p) }}(mosi_data_br));
+
+  //------------------------------------------------------------------ RX ---
+  // bank {{ rx_bank }}, BUS_DIR 1 (RX_ONLY). fifo_rd_clk komt van de TX-PLL: de
+  // MxFE leidt zijn strobe af van onze forwarded clock, dus schrijf- en
+  // leeszijde van de bitslice-FIFO zijn mesochroon -- zelfde frequentie, vaste
+  // onbekende fase. De 8 diepe FIFO vangt alleen die fase op, het is geen CDC.
+  {{ ip_rx }} i_hssio_rx (
+    .clk                              (pll_inclk),
+    .rst                              (hsci_pll_reset),
+    .pll0_locked                      (locked_rx),
+    .pll0_clkout0                     (rx_pclk_unused),
+    .rst_seq_done                     (seq_done_rx),
+{% for b in rx_bsc %}
+    .dly_rdy_bsc{{ b }}                     (rx_dly_rdy_bsc{{ b }}),
+    .vtc_rdy_bsc{{ b }}                     (rx_vtc_rdy_bsc{{ b }}),
+    .en_vtc_bsc{{ b }}                      (1'b1),
+{% endfor %}
+    .{{ "%-32s"|format(rx_sig_clk_p) }}({{ rx_sig_clk_p }}),
+    .{{ "%-32s"|format(rx_sig_clk_n) }}({{ rx_sig_clk_n }}),
+    .data_to_fabric_{{ "%-16s"|format(rx_sig_clk_p) }}(miso_clk_br),
+    .{{ "%-32s"|format(rx_sig_dat_p) }}({{ rx_sig_dat_p }}),
+    .{{ "%-32s"|format(rx_sig_dat_n) }}({{ rx_sig_dat_n }}),
+    .data_to_fabric_{{ "%-16s"|format(rx_sig_dat_p) }}(miso_data_br),
+    .fifo_rd_clk_{{ "%-21s"|format(rx_slice_strobe) }}(hsci_pclk),
+    .fifo_rd_en_{{ "%-22s"|format(rx_slice_strobe) }}(1'b0),
+    .fifo_empty_{{ "%-22s"|format(rx_slice_strobe) }}(fifo_empty_str),
+    .fifo_rd_clk_{{ "%-21s"|format(rx_slice_data) }}(hsci_pclk),
+    .fifo_rd_en_{{ "%-22s"|format(rx_slice_data) }}(!fifo_empty_dat & rst_seq_done),
+    .fifo_empty_{{ "%-22s"|format(rx_slice_data) }}(fifo_empty_dat));
+
+endmodule

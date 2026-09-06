@@ -1,0 +1,279 @@
+// ***************************************************************************
+//  hsci_demo_top.sv -- GEGENEREERD door demo/build_demo.py
+//  Bron: demo/templates/hsci_demo_top.sv.j2 + demo/generated/hsci_facts.json
+//
+//  De hele demo in een module:
+//
+//    {{ sys_clk_p }}/{{ sys_clk_n }} ({{ sys_clk_mhz }} MHz)
+//        |
+//        +-- {{ ip_mmcm }} (MMCM)
+//              +-- clk_out1  {{ ref_freq }} MHz  -> XPLL-referentie van beide wizards
+//              +-- clk_out2  {{ axi_clk_mhz }} MHz  -> JTAG-AXI klokdomein
+//
+//    {{ ip_jtag }} ({{ axi_clk_mhz }} MHz)
+//        -> {{ ip_cdc }}  AXI4-Lite klokconverter
+//        -> axi_hsci      op hsci_pclk ({{ pclk_mhz }} MHz)
+//        -> hsci_phy_top  -> 8 LVDS pads
+//
+//  De JTAG-AXI draait expres NIET op hsci_pclk. Dat is het punt van de demo:
+//  je debugmaster hangt aan een eigen, vrijlopende klok en de klokconverter
+//  doet de overgang. Zou je hem rechtstreeks op hsci_pclk hangen, dan valt je
+//  debugpad weg zodra de XPLL uit lock gaat.
+//
+//  LET OP -- gevolg van axi_hsci op hsci_pclk zetten:
+//  het register HSCI_RATE_CTRL[8] (hsci_pll_reset) zet de XPLL in reset, en
+//  daarmee de klok waarop axi_hsci zelf loopt. Schrijf je die bit op 1, dan
+//  kun je hem niet meer op 0 schrijven -- alleen een nieuwe bitstream of een
+//  externe reset helpt dan. Uit reset komt de bit op 0, dus opstarten gaat
+//  goed. Wil je die bit echt kunnen gebruiken, geef axi_hsci dan een eigen
+//  s_axi_aclk (bijvoorbeeld clk_out2) en laat de interne CDC van axi_hsci het
+//  werk doen.
+// ***************************************************************************
+
+`timescale 1ps/1ps
+
+module hsci_demo_top (
+  // systeemklok
+  input  wire         {{ sys_clk_p }},
+  input  wire         {{ sys_clk_n }},
+
+  // HSCI LVDS pads
+  output wire         {{ tx_sig_clk_p }},
+  output wire         {{ tx_sig_clk_n }},
+  output wire         {{ tx_sig_dat_p }},
+  output wire         {{ tx_sig_dat_n }},
+  input  wire         {{ rx_sig_clk_p }},
+  input  wire         {{ rx_sig_clk_n }},
+  input  wire         {{ rx_sig_dat_p }},
+  input  wire         {{ rx_sig_dat_n }},
+
+  // status, bijvoorbeeld naar leds
+  output wire         mmcm_locked_o,
+  output wire         hsci_pll_locked_o,
+  output wire         hsci_rst_seq_done_o
+);
+
+  localparam int S_AXI_ADDR_WIDTH = {{ axi_addr_width }};  // aperture van axi_hsci
+  localparam int AXI_DATA_WIDTH = {{ axi_data_width }};
+
+  //=========================================================================
+  // Klokken
+  //=========================================================================
+  wire ref_clk;        // {{ ref_freq }} MHz, naar beide XPLLs
+  wire axi_clk;        // {{ axi_clk_mhz }} MHz, JTAG-AXI domein
+  wire mmcm_locked;
+  wire hsci_pclk;      // {{ pclk_mhz }} MHz, uit de TX-XPLL
+
+  {{ ip_mmcm }} i_clk (
+    .clk_in1_p ({{ sys_clk_p }}),
+    .clk_in1_n ({{ sys_clk_n }}),
+    .clk_out1  (ref_clk),
+    .clk_out2  (axi_clk),
+    .locked    (mmcm_locked));
+
+  //=========================================================================
+  // Resets -- ad_rst uit ADI's library/common, per klokdomein een
+  //=========================================================================
+  wire axi_aresetn;    // axi_clk domein: los zodra de MMCM lockt
+  wire pclk_aresetn;   // hsci_pclk domein: los zodra ook de XPLLs locken
+  wire hsci_pll_locked;
+  wire hsci_rst_seq_done;
+
+  ad_rst i_rst_axi (
+    .rst_async (~mmcm_locked),
+    .clk       (axi_clk),
+    .rstn      (axi_aresetn),
+    .rst       ());
+
+  ad_rst i_rst_pclk (
+    .rst_async (~(mmcm_locked & hsci_pll_locked)),
+    .clk       (hsci_pclk),
+    .rstn      (pclk_aresetn),
+    .rst       ());
+
+  //=========================================================================
+  // JTAG-AXI master op axi_clk
+  //=========================================================================
+  wire [31:0] jtag_awaddr;
+  wire [2:0]  jtag_awprot;
+  wire        jtag_awvalid, jtag_awready;
+  wire [AXI_DATA_WIDTH-1:0]     jtag_wdata;
+  wire [(AXI_DATA_WIDTH/8)-1:0] jtag_wstrb;
+  wire        jtag_wvalid, jtag_wready;
+  wire [1:0]  jtag_bresp;
+  wire        jtag_bvalid, jtag_bready;
+  wire [31:0] jtag_araddr;
+  wire [2:0]  jtag_arprot;
+  wire        jtag_arvalid, jtag_arready;
+  wire [AXI_DATA_WIDTH-1:0] jtag_rdata;
+  wire [1:0]  jtag_rresp;
+  wire        jtag_rvalid, jtag_rready;
+
+  {{ ip_jtag }} i_jtag_axi (
+    .aclk          (axi_clk),
+    .aresetn       (axi_aresetn),
+    .m_axi_awaddr  (jtag_awaddr),
+    .m_axi_awprot  (jtag_awprot),
+    .m_axi_awvalid (jtag_awvalid),
+    .m_axi_awready (jtag_awready),
+    .m_axi_wdata   (jtag_wdata),
+    .m_axi_wstrb   (jtag_wstrb),
+    .m_axi_wvalid  (jtag_wvalid),
+    .m_axi_wready  (jtag_wready),
+    .m_axi_bresp   (jtag_bresp),
+    .m_axi_bvalid  (jtag_bvalid),
+    .m_axi_bready  (jtag_bready),
+    .m_axi_araddr  (jtag_araddr),
+    .m_axi_arprot  (jtag_arprot),
+    .m_axi_arvalid (jtag_arvalid),
+    .m_axi_arready (jtag_arready),
+    .m_axi_rdata   (jtag_rdata),
+    .m_axi_rresp   (jtag_rresp),
+    .m_axi_rvalid  (jtag_rvalid),
+    .m_axi_rready  (jtag_rready));
+
+  //=========================================================================
+  // AXI4-Lite klokconverter: axi_clk -> hsci_pclk
+  //=========================================================================
+  wire [31:0] pclk_awaddr;
+  wire [2:0]  pclk_awprot;
+  wire        pclk_awvalid, pclk_awready;
+  wire [AXI_DATA_WIDTH-1:0]     pclk_wdata;
+  wire [(AXI_DATA_WIDTH/8)-1:0] pclk_wstrb;
+  wire        pclk_wvalid, pclk_wready;
+  wire [1:0]  pclk_bresp;
+  wire        pclk_bvalid, pclk_bready;
+  wire [31:0] pclk_araddr;
+  wire [2:0]  pclk_arprot;
+  wire        pclk_arvalid, pclk_arready;
+  wire [AXI_DATA_WIDTH-1:0] pclk_rdata;
+  wire [1:0]  pclk_rresp;
+  wire        pclk_rvalid, pclk_rready;
+
+  {{ ip_cdc }} i_axi_cdc (
+    .s_axi_aclk    (axi_clk),
+    .s_axi_aresetn (axi_aresetn),
+    .s_axi_awaddr  (jtag_awaddr),
+    .s_axi_awprot  (jtag_awprot),
+    .s_axi_awvalid (jtag_awvalid),
+    .s_axi_awready (jtag_awready),
+    .s_axi_wdata   (jtag_wdata),
+    .s_axi_wstrb   (jtag_wstrb),
+    .s_axi_wvalid  (jtag_wvalid),
+    .s_axi_wready  (jtag_wready),
+    .s_axi_bresp   (jtag_bresp),
+    .s_axi_bvalid  (jtag_bvalid),
+    .s_axi_bready  (jtag_bready),
+    .s_axi_araddr  (jtag_araddr),
+    .s_axi_arprot  (jtag_arprot),
+    .s_axi_arvalid (jtag_arvalid),
+    .s_axi_arready (jtag_arready),
+    .s_axi_rdata   (jtag_rdata),
+    .s_axi_rresp   (jtag_rresp),
+    .s_axi_rvalid  (jtag_rvalid),
+    .s_axi_rready  (jtag_rready),
+
+    .m_axi_aclk    (hsci_pclk),
+    .m_axi_aresetn (pclk_aresetn),
+    .m_axi_awaddr  (pclk_awaddr),
+    .m_axi_awprot  (pclk_awprot),
+    .m_axi_awvalid (pclk_awvalid),
+    .m_axi_awready (pclk_awready),
+    .m_axi_wdata   (pclk_wdata),
+    .m_axi_wstrb   (pclk_wstrb),
+    .m_axi_wvalid  (pclk_wvalid),
+    .m_axi_wready  (pclk_wready),
+    .m_axi_bresp   (pclk_bresp),
+    .m_axi_bvalid  (pclk_bvalid),
+    .m_axi_bready  (pclk_bready),
+    .m_axi_araddr  (pclk_araddr),
+    .m_axi_arprot  (pclk_arprot),
+    .m_axi_arvalid (pclk_arvalid),
+    .m_axi_arready (pclk_arready),
+    .m_axi_rdata   (pclk_rdata),
+    .m_axi_rresp   (pclk_rresp),
+    .m_axi_rvalid  (pclk_rvalid),
+    .m_axi_rready  (pclk_rready));
+
+  //=========================================================================
+  // ADI's axi_hsci, op hsci_pclk
+  //=========================================================================
+  wire [7:0] hsci_menc_clk;
+  wire [7:0] hsci_mosi_data;
+  wire [7:0] hsci_miso_data;
+  wire       hsci_pll_reset;
+  wire       vtc_rdy_bsc_tx, dly_rdy_bsc_tx;
+  wire       vtc_rdy_bsc_rx, dly_rdy_bsc_rx;
+
+  axi_hsci #(
+    .S_AXI_ADDR_WIDTH (S_AXI_ADDR_WIDTH),
+    .AXI_DATA_WIDTH   (AXI_DATA_WIDTH)
+  ) i_axi_hsci (
+    .s_axi_aclk    (hsci_pclk),
+    .s_axi_aresetn (pclk_aresetn),
+
+    .s_axi_awaddr  (pclk_awaddr[S_AXI_ADDR_WIDTH-1:0]),
+    .s_axi_awprot  (pclk_awprot),
+    .s_axi_awvalid (pclk_awvalid),
+    .s_axi_awready (pclk_awready),
+    .s_axi_wdata   (pclk_wdata),
+    .s_axi_wstrb   (pclk_wstrb),
+    .s_axi_wvalid  (pclk_wvalid),
+    .s_axi_wready  (pclk_wready),
+    .s_axi_bresp   (pclk_bresp),
+    .s_axi_bvalid  (pclk_bvalid),
+    .s_axi_bready  (pclk_bready),
+    .s_axi_araddr  (pclk_araddr[S_AXI_ADDR_WIDTH-1:0]),
+    .s_axi_arprot  (pclk_arprot),
+    .s_axi_arvalid (pclk_arvalid),
+    .s_axi_arready (pclk_arready),
+    .s_axi_rdata   (pclk_rdata),
+    .s_axi_rresp   (pclk_rresp),
+    .s_axi_rvalid  (pclk_rvalid),
+    .s_axi_rready  (pclk_rready),
+
+    .hsci_pclk           (hsci_pclk),
+    .hsci_menc_clk       (hsci_menc_clk),
+    .hsci_mosi_data      (hsci_mosi_data),
+    .hsci_miso_data      (hsci_miso_data),
+    .hsci_pll_reset      (hsci_pll_reset),
+    .hsci_rst_seq_done   (hsci_rst_seq_done),
+    .hsci_pll_locked     (hsci_pll_locked),
+    .hsci_vtc_rdy_bsc_tx (vtc_rdy_bsc_tx),
+    .hsci_dly_rdy_bsc_tx (dly_rdy_bsc_tx),
+    .hsci_vtc_rdy_bsc_rx (vtc_rdy_bsc_rx),
+    .hsci_dly_rdy_bsc_rx (dly_rdy_bsc_rx));
+
+  //=========================================================================
+  // De PHY: twee wizard-instanties over bank {{ tx_bank }} (TX) en {{ rx_bank }} (RX)
+  //=========================================================================
+  hsci_phy_top i_hsci_phy (
+    .pll_inclk        (ref_clk),
+    .hsci_pll_reset   (hsci_pll_reset),
+    .hsci_pclk        (hsci_pclk),
+    .hsci_pll_locked  (hsci_pll_locked),
+    .rst_seq_done     (hsci_rst_seq_done),
+
+    .{{ "%-16s"|format(tx_sig_clk_p) }}({{ tx_sig_clk_p }}),
+    .{{ "%-16s"|format(tx_sig_clk_n) }}({{ tx_sig_clk_n }}),
+    .{{ "%-16s"|format(tx_sig_dat_p) }}({{ tx_sig_dat_p }}),
+    .{{ "%-16s"|format(tx_sig_dat_n) }}({{ tx_sig_dat_n }}),
+    .{{ "%-16s"|format(rx_sig_clk_p) }}({{ rx_sig_clk_p }}),
+    .{{ "%-16s"|format(rx_sig_clk_n) }}({{ rx_sig_clk_n }}),
+    .{{ "%-16s"|format(rx_sig_dat_p) }}({{ rx_sig_dat_p }}),
+    .{{ "%-16s"|format(rx_sig_dat_n) }}({{ rx_sig_dat_n }}),
+
+    .hsci_menc_clk    (hsci_menc_clk),
+    .hsci_mosi_data   (hsci_mosi_data),
+    .hsci_miso_data   (hsci_miso_data),
+
+    .vtc_rdy_bsc_tx   (vtc_rdy_bsc_tx),
+    .dly_rdy_bsc_tx   (dly_rdy_bsc_tx),
+    .vtc_rdy_bsc_rx   (vtc_rdy_bsc_rx),
+    .dly_rdy_bsc_rx   (dly_rdy_bsc_rx));
+
+  assign mmcm_locked_o       = mmcm_locked;
+  assign hsci_pll_locked_o   = hsci_pll_locked;
+  assign hsci_rst_seq_done_o = hsci_rst_seq_done;
+
+endmodule
