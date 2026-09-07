@@ -1,20 +1,20 @@
 ###############################################################################
 ##  hsci_probe_wizard.tcl
 ##
-##  Beantwoordt: is de High Speed SelectIO Wizard in deze Vivado nieuwer dan
-##  ADI's v3.6, en zijn de CONFIG-properties die hsci_hssio_gen.tcl gebruikt
-##  nog steeds geldig?
+##  Answers: is the High Speed SelectIO Wizard in this Vivado newer than
+##  ADI's v3.6, and are the CONFIG properties that hsci_hssio_gen.tcl uses
+##  still valid?
 ##
-##  Draait niets destructiefs -- maakt een throwaway IP in een in-memory
-##  project, leest de properties uit en print een verdict.
+##  Runs nothing destructive -- creates a throwaway IP in an in-memory
+##  project, reads out the properties and prints a verdict.
 ##
 ##      vivado -mode batch -source hsci_probe_wizard.tcl
 ###############################################################################
 
-set part_name "xczu17eg-ffvd1760-1-e"    ;# <-- jouw part
+set part_name "xczu17eg-ffvd1760-1-e"    ;# <-- your part
 
-# Properties die hsci_hssio_gen.tcl zet, met de waarde die het zou zetten.
-# (BYTE-properties worden apart getest op een representatieve pin.)
+# Properties that hsci_hssio_gen.tcl sets, with the value it would set.
+# (BYTE properties are tested separately on a representative pin.)
 set want {
     DIFFERENTIAL_IO_STD          LVDS
     ENABLE_N_PINS                0
@@ -33,7 +33,7 @@ set want {
     PLL_LOCS                     {}
 }
 
-# Per-pin properties, getest op BYTE0_PIN4.
+# Per-pin properties, tested on BYTE0_PIN4.
 set want_pin {
     ENABLE_BYTE0_PIN4
     BYTE0_PIN4_SIGNAL_NAME
@@ -50,10 +50,10 @@ if {[llength [current_project -quiet]] == 0} {
     create_project -in_memory -part $part_name
 }
 
-puts "\n===== BESCHIKBARE VERSIES ======================================="
+puts "\n===== AVAILABLE VERSIONS ========================================"
 set defs [get_ipdefs -quiet -filter {NAME == high_speed_selectio_wiz}]
 if {[llength $defs] == 0} {
-    error "high_speed_selectio_wiz bestaat niet in deze Vivado / voor dit part"
+    error "high_speed_selectio_wiz does not exist in this Vivado / for this part"
 }
 foreach d $defs {
     puts [format "  %-60s  %s" $d [get_property -quiet VERSION $d]]
@@ -63,9 +63,9 @@ catch {remove_files [get_files -quiet hsci_probe_tmp.xci]}
 create_ip -name high_speed_selectio_wiz -vendor xilinx.com -library ip \
           -module_name hsci_probe_tmp
 set ip [get_ips hsci_probe_tmp]
-# IP-objecten hebben geen VERSION property; de versie zit in IPDEF
-puts "\n  aangemaakt met versie : [lindex [split [get_property IPDEF $ip] :] 3]"
-puts "  ADI's vcu118 gebruikt : 3.6"
+# IP objects have no VERSION property; the version lives in IPDEF
+puts "\n  created with version : [lindex [split [get_property IPDEF $ip] :] 3]"
+puts "  ADI's vcu118 uses    : 3.6"
 
 set have [list]
 foreach p [list_property $ip] {
@@ -73,11 +73,11 @@ foreach p [list_property $ip] {
         lappend have [string range $p 7 end]
     }
 }
-puts "  aantal CONFIG properties: [llength $have]"
+puts "  number of CONFIG properties: [llength $have]"
 
 #-----------------------------------------------------------------------------
-puts "\n===== PROPERTIES DIE hsci_hssio_gen.tcl ZET ====================="
-puts [format "  %-30s %-8s %-14s %s" "property" "bestaat" "huidig" "legale waarden"]
+puts "\n===== PROPERTIES hsci_hssio_gen.tcl SETS ========================"
+puts [format "  %-30s %-8s %-14s %s" "property" "exists" "current" "legal values"]
 puts "  [string repeat - 88]"
 
 set missing [list]
@@ -86,7 +86,7 @@ set badval  [list]
 foreach {p v} $want {
     if {[lsearch -exact $have $p] < 0} {
         lappend missing $p
-        puts [format "  %-30s %-8s" $p "NEE"]
+        puts [format "  %-30s %-8s" $p "NO"]
         continue
     }
     set cur  [get_property -quiet CONFIG.$p $ip]
@@ -97,12 +97,12 @@ foreach {p v} $want {
     } else {
         set shown [join $legal ", "]
     }
-    if {$shown eq ""} { set shown "<vrije waarde>" }
-    puts [format "  %-30s %-8s %-14s %s" $p "ja" $cur $shown]
+    if {$shown eq ""} { set shown "<free value>" }
+    puts [format "  %-30s %-8s %-14s %s" $p "yes" $cur $shown]
 
-    # als het een enum is, controleer of onze waarde erin zit
+    # if it's an enum, check that our value is in it
     if {$v ne "" && [llength $legal] > 0 && [lsearch -exact $legal $v] < 0} {
-        lappend badval "$p: wij zetten '$v', legaal is \{$legal\}"
+        lappend badval "$p: we set '$v', legal is \{$legal\}"
     }
 }
 
@@ -110,17 +110,17 @@ puts "\n===== PER-PIN PROPERTIES (BYTE0_PIN4) =========================="
 foreach p $want_pin {
     if {[lsearch -exact $have $p] < 0} {
         lappend missing $p
-        puts [format "  %-30s %s" $p "NEE"]
+        puts [format "  %-30s %s" $p "NO"]
     } else {
         set legal [list_property_value -quiet CONFIG.$p $ip]
-        if {$legal eq ""} { set legal "<vrije waarde>" } else { set legal [join $legal ", "] }
-        puts [format "  %-30s ja      %s" $p $legal]
+        if {$legal eq ""} { set legal "<free value>" } else { set legal [join $legal ", "] }
+        puts [format "  %-30s yes     %s" $p $legal]
     }
 }
 
 #-----------------------------------------------------------------------------
-puts "\n===== NIEUW T.O.V. ADI's 3.6 ===================================="
-# ADI's 3.6 set, zonder de per-pin properties (die zijn er honderden)
+puts "\n===== NEW COMPARED TO ADI's 3.6 ================================="
+# ADI's 3.6 set, without the per-pin properties (there are hundreds of those)
 set adi36 {
     APPEND_PIN_NO BANK BUS_DIR DIFFERENTIAL_IO_STD ENABLE_N_PINS
     ENABLE_PLL_DRP_PORTS FIFO_RD_EN_CONTROL PLL0_CLK_SOURCE PLL0_DATA_SPEED
@@ -133,9 +133,9 @@ foreach p $have {
     if {[lsearch -exact $adi36 $p] < 0} { lappend news $p }
 }
 if {[llength $news] == 0} {
-    puts "  geen nieuwe niet-pin properties"
+    puts "  no new non-pin properties"
 } else {
-    puts "  [llength $news] property(s) die ADI's 3.6 config niet zet:"
+    puts "  [llength $news] property(s) ADI's 3.6 config doesn't set:"
     foreach p [lsort $news] {
         puts [format "    %-32s = %s" $p [get_property -quiet CONFIG.$p $ip]]
     }
@@ -144,13 +144,13 @@ if {[llength $news] == 0} {
 #-----------------------------------------------------------------------------
 puts "\n===== VERDICT ==================================================="
 if {[llength $missing] == 0 && [llength $badval] == 0} {
-    puts "  OK -- alle properties die hsci_hssio_gen.tcl gebruikt bestaan"
-    puts "        en accepteren de waarden die het script zet."
+    puts "  OK -- all properties hsci_hssio_gen.tcl uses exist"
+    puts "        and accept the values the script sets."
 } else {
-    foreach p $missing { puts "  ONTBREEKT : $p" }
-    foreach b $badval  { puts "  WAARDE    : $b" }
-    puts "\n  Pas hsci_hssio_gen.tcl aan voordat je hem draait."
+    foreach p $missing { puts "  MISSING   : $p" }
+    foreach b $badval  { puts "  VALUE     : $b" }
+    puts "\n  Adjust hsci_hssio_gen.tcl before running it."
 }
 
-puts "\n  Let op: dit zegt niets over de POORTNAMEN van de gegenereerde module."
-puts "  hsci_hssio_gen.tcl controleert die zelf tegen de .veo template.\n"
+puts "\n  Note: this says nothing about the PORT NAMES of the generated module."
+puts "  hsci_hssio_gen.tcl checks those itself against the .veo template.\n"
