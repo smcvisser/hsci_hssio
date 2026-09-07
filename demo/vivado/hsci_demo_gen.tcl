@@ -1,18 +1,18 @@
 ###############################################################################
 ##  hsci_demo_gen.tcl
 ##
-##  De Vivado-helft van de demo. Wordt aangeroepen door demo/build_demo.py en
-##  doet alles waarvoor je de device database nodig hebt:
+##  The Vivado half of the demo. Called by demo/build_demo.py, it does
+##  everything you need the device database for:
 ##
-##    1. de acht HSCI-pinnen analyseren en de regels toetsen
-##    2. de twee High Speed SelectIO Wizard instanties aanmaken
-##       (afgeleid uit de pinnen, niet overgetypt uit docs/hssio_for_demo.txt)
-##    3. de MMCM, de JTAG-AXI master en de AXI-Lite klokconverter aanmaken
-##    4. de voorspelde port map toetsen aan de echte .veo
-##    5. alles wat de templates nodig hebben wegschrijven als JSON
+##    1. analyse the eight HSCI pins and check the rules
+##    2. create the two High Speed SelectIO Wizard instances
+##       (derived from the pins, not retyped from docs/hssio_for_demo.txt)
+##    3. create the MMCM, the JTAG-AXI master and the AXI-Lite clock converter
+##    4. check the predicted port map against the real .veo
+##    5. write out everything the templates need as JSON
 ##
-##  De analyse en de wizard-helpers komen uit scripts/hsci_hssio_lib.tcl, zodat
-##  de demo en de generator dezelfde motor gebruiken.
+##  The analysis and the wizard helpers come from scripts/hsci_hssio_lib.tcl, so
+##  the demo and the generator use the same engine.
 ##
 ##      vivado -mode batch -source hsci_demo_gen.tcl -tclargs <cfg.tcl> <out.json>
 ###############################################################################
@@ -22,7 +22,7 @@ set json_file [lindex $argv 1]
 set here      [file normalize [file dirname [info script]]]
 
 source [file join $here .. .. scripts hsci_hssio_lib.tcl]
-source $cfg_file      ;# vult de array demo(...)
+source $cfg_file      ;# fills the demo(...) array
 
 proc j_str  {k v} { return "\"$k\": \"$v\"" }
 proc j_num  {k v} { return "\"$k\": $v" }
@@ -38,7 +38,7 @@ proc j_obj  {parts {indent "    "}} {
 }
 
 #=============================================================================
-# 1. DEVICE EN PINNEN
+# 1. DEVICE AND PINS
 #=============================================================================
 
 create_project -in_memory -part $demo(part)
@@ -52,7 +52,7 @@ puts "  device      : [dict get $pi device]  package [dict get $pi package]"
 puts "  speed grade : [dict get $pi speed]  ($gen)"
 hsci_check_rate $pi $demo(data_speed) $demo(force_rate)
 
-puts "\n===== PIN-ANALYSE ==============================================="
+puts "\n===== PIN ANALYSIS ==============================================="
 set txcp [hsci_pin_info $demo(tx_clk_p)] ; set txcn [hsci_pin_info $demo(tx_clk_n)]
 set txdp [hsci_pin_info $demo(tx_dat_p)] ; set txdn [hsci_pin_info $demo(tx_dat_n)]
 set rxcp [hsci_pin_info $demo(rx_clk_p)] ; set rxcn [hsci_pin_info $demo(rx_clk_n)]
@@ -65,32 +65,32 @@ foreach {label d} [list "TX clkfwd P" $txcp "TX clkfwd N" $txcn \
     puts "  $label : [hsci_fmt $d]"
 }
 
-puts "\n===== REGELCHECK ================================================"
+puts "\n===== RULE CHECK ================================================="
 hsci_check_pair "TX clkfwd" $txcp $txcn
 hsci_check_pair "TX data"   $txdp $txdn
 hsci_check_pair "RX strobe" $rxcp $rxcn
 hsci_check_pair "RX data"   $rxdp $rxdn
-puts "ok  vier echte differentiele paren"
+puts "ok  four real differential pairs"
 
 set tx_bank [dict get $txcp bank]
 set rx_bank [dict get $rxcp bank]
 hsci_check_bank_hp $tx_bank "TX"
 hsci_check_bank_hp $rx_bank "RX"
-puts "ok  bank $tx_bank (TX) en bank $rx_bank (RX) zijn HP banks"
+puts "ok  bank $tx_bank (TX) and bank $rx_bank (RX) are HP banks"
 
 if {[dict get $txdp bank] != $tx_bank || [dict get $txcp byte] != [dict get $txdp byte]} {
-    hsci_fail "TX clkfwd en data zitten niet in dezelfde byte group" \
-              "beide TX-signalen delen de PLL-klok van hun byte group"
+    hsci_fail "TX clkfwd and data are not in the same byte group" \
+              "both TX signals share the PLL clock of their byte group"
 }
 set tx_bsc_list [lsort -unique -integer [list [dict get $txcp bsc] [dict get $txdp bsc]]]
 puts "ok  TX clkfwd + data in byte group [dict get $txcp byte] (bsc [join $tx_bsc_list {, }])"
 
 set rx_bsc_list [hsci_check_rx_group $rxcp $rxdp]
-puts "ok  RX strobe op [dict get $rxcp clkcap] pin, byte group [dict get $rxcp byte]\
+puts "ok  RX strobe on [dict get $rxcp clkcap] pin, byte group [dict get $rxcp byte]\
  (bsc [join $rx_bsc_list {, }])"
 
 #=============================================================================
-# 2. AFGELEIDE GETALLEN
+# 2. DERIVED NUMBERS
 #=============================================================================
 
 set pclk_freq   [expr {double($demo(data_speed)) / 8.0}]
@@ -100,7 +100,7 @@ set rx_bytes    [lsort -unique -integer [list [dict get $rxcp byte] [dict get $r
 set rx_slice_c  [dict get $rxcp slice]
 set rx_slice_d  [dict get $rxdp slice]
 
-puts "\n===== AFGELEID =================================================="
+puts "\n===== DERIVED ==================================================="
 puts "  data rate       : $demo(data_speed) Mb/s"
 puts "  hsci_pclk       : $pclk_freq MHz"
 puts "  forwarded clock : $fwd_clk_mhz MHz"
@@ -114,8 +114,8 @@ set rx_ports [hsci_predict_rx $rx_bsc_list $rx_slice_c $rx_slice_d \
 #=============================================================================
 # 3. WIZARD-PROPERTIES
 #
-#  Zelfde vorm als docs/hssio_for_demo.txt, maar afgeleid uit de pinnen:
-#  BANK, BYTE?_PIN? en de bsc-indices komen allemaal uit de device database.
+#  Same shape as docs/hssio_for_demo.txt, but derived from the pins:
+#  BANK, BYTE?_PIN? and the bsc indices all come from the device database.
 #=============================================================================
 
 set common_props [list \
@@ -148,8 +148,8 @@ set rx_props [concat $common_props \
     [hsci_pin_props [dict get $rxdp byte] [dict get $rxdp idx] $demo(rx_sig_dat_p) {Data}] \
     [hsci_pin_props [dict get $rxdn byte] [dict get $rxdn idx] $demo(rx_sig_dat_n) {}]]
 
-# Alle device-queries zijn gedaan. link_design zet DESIGN_MODE op GateLvl en
-# close_design zet dat niet terug; create_ip weigert dan.
+# All device queries are done. link_design sets DESIGN_MODE to GateLvl and
+# close_design doesn't set it back; create_ip then refuses.
 if {$we_linked} {
     catch {close_design}
     set fs [get_filesets -quiet sources_1]
@@ -159,7 +159,7 @@ if {$we_linked} {
 }
 
 #=============================================================================
-# 4. IP GENEREREN
+# 4. IP GENERATION
 #=============================================================================
 
 puts "\n===== HSSIO WIZARDS ============================================="
@@ -173,9 +173,9 @@ puts "  TX : $demo(ip_tx)  bank $tx_bank"
 set ip_rx [hsci_create_ip $demo(ip_rx) $rx_props $rx_keep]
 puts "  RX : $demo(ip_rx)  bank $rx_bank"
 
-puts "\n===== KLOK, JTAG-AXI EN CDC ====================================="
+puts "\n===== CLOCK, JTAG-AXI AND CDC ==================================="
 
-# --- MMCM: systeemklok -> XPLL-referentie + een onafhankelijke AXI-klok ------
+# --- MMCM: system clock -> XPLL reference + an independent AXI clock --------
 if {[llength [get_ips -quiet $demo(ip_mmcm)]]} {
     remove_files [get_files -quiet $demo(ip_mmcm).xci]
 }
@@ -191,15 +191,15 @@ set mmcm_props [list \
     CONFIG.USE_LOCKED                  {true} \
     CONFIG.USE_RESET                   {false}]
 if {[catch {set_property -dict $mmcm_props $ip_mmcm} err]} {
-    hsci_fail "clk_wiz weigert deze configuratie:\n            $err"
+    hsci_fail "clk_wiz refuses this configuration:\n            $err"
 }
 hsci_verify_props $demo(ip_mmcm) $ip_mmcm $mmcm_props
 puts "  MMCM     : $demo(ip_mmcm)  $demo(sys_clk_mhz) MHz in ->\
- $demo(mmcm_out_ref_mhz) / $demo(mmcm_out_axi_mhz) MHz uit"
+ $demo(mmcm_out_ref_mhz) / $demo(mmcm_out_axi_mhz) MHz out"
 
 # --- JTAG-AXI master --------------------------------------------------------
-# Draait expres op de AXI-klok van de MMCM, niet op hsci_pclk. Zo is de CDC
-# hieronder een echte klokdomeinovergang en geen decoratie.
+# Deliberately runs on the MMCM's AXI clock, not on hsci_pclk. That way the
+# CDC below is a real clock domain crossing, not decoration.
 if {[llength [get_ips -quiet $demo(ip_jtag)]]} {
     remove_files [get_files -quiet $demo(ip_jtag).xci]
 }
@@ -209,12 +209,12 @@ set jtag_props [list \
     CONFIG.PROTOCOL          {2} \
     CONFIG.M_AXI_DATA_WIDTH  $demo(axi_data_width)]
 if {[catch {set_property -dict $jtag_props $ip_jtag} err]} {
-    hsci_fail "jtag_axi weigert deze configuratie:\n            $err"
+    hsci_fail "jtag_axi refuses this configuration:\n            $err"
 }
 hsci_verify_props $demo(ip_jtag) $ip_jtag $jtag_props
-puts "  JTAG-AXI : $demo(ip_jtag)  AXI4-Lite master op de $demo(mmcm_out_axi_mhz) MHz klok"
+puts "  JTAG-AXI : $demo(ip_jtag)  AXI4-Lite master on the $demo(mmcm_out_axi_mhz) MHz clock"
 
-# --- AXI-Lite klokconverter: AXI-klok -> hsci_pclk --------------------------
+# --- AXI-Lite clock converter: AXI clock -> hsci_pclk -----------------------
 if {[llength [get_ips -quiet $demo(ip_cdc)]]} {
     remove_files [get_files -quiet $demo(ip_cdc).xci]
 }
@@ -226,7 +226,7 @@ set cdc_props [list \
     CONFIG.ADDR_WIDTH  {32} \
     CONFIG.ID_WIDTH    {0}]
 if {[catch {set_property -dict $cdc_props $ip_cdc} err]} {
-    hsci_fail "axi_clock_converter weigert deze configuratie:\n            $err"
+    hsci_fail "axi_clock_converter refuses this configuration:\n            $err"
 }
 hsci_verify_props $demo(ip_cdc) $ip_cdc $cdc_props
 puts "  AXI CDC  : $demo(ip_cdc)  $demo(mmcm_out_axi_mhz) MHz -> hsci_pclk ($pclk_freq MHz)"
@@ -237,49 +237,49 @@ foreach ip [list $demo(ip_tx) $demo(ip_rx) $demo(ip_mmcm) $demo(ip_jtag) $demo(i
 }
 
 #=============================================================================
-# 5. PORT MAP TOETSEN
+# 5. PORT MAP CHECK
 #=============================================================================
 
-puts "\n===== POORTCHECK ================================================"
+puts "\n===== PORT CHECK ================================================"
 set ok 1
 if {![hsci_check_ports $demo(ip_tx) $tx_ports]} { set ok 0 }
 if {![hsci_check_ports $demo(ip_rx) $rx_ports]} { set ok 0 }
 
-# Voor de andere drie weten we de poortnamen niet uit het hoofd; we halen ze op
-# en toetsen alleen of de handvol die de templates gebruiken bestaat.
+# For the other three we don't know the port names by heart; we fetch them and
+# only check that the handful the templates use exists.
 set mmcm_have [hsci_veo_ports $demo(ip_mmcm)]
 set jtag_have [hsci_veo_ports $demo(ip_jtag)]
 set cdc_have  [hsci_veo_ports $demo(ip_cdc)]
-foreach {naam have willen} [list \
+foreach {name have want} [list \
     $demo(ip_mmcm) $mmcm_have {clk_in1_p clk_in1_n clk_out1 clk_out2 locked} \
     $demo(ip_jtag) $jtag_have {aclk aresetn m_axi_awaddr m_axi_wdata m_axi_rdata} \
     $demo(ip_cdc)  $cdc_have  {s_axi_aclk s_axi_aresetn m_axi_aclk m_axi_aresetn}] {
     set miss [list]
-    foreach p $willen { if {[lsearch -exact $have $p] < 0} { lappend miss $p } }
+    foreach p $want { if {[lsearch -exact $have $p] < 0} { lappend miss $p } }
     if {[llength $miss]} {
         set ok 0
-        puts "  !! $naam : verwachte poort(en) ontbreken: [join $miss {, }]"
-        puts "     IP biedt: [join $have {, }]"
+        puts "  !! $name : expected port(s) missing: [join $miss {, }]"
+        puts "     IP offers: [join $have {, }]"
     } else {
-        puts "  ok $naam : de verwachte poorten bestaan"
+        puts "  ok $name : the expected ports exist"
     }
 }
 if {!$ok} {
-    hsci_fail "de port map klopt niet met wat de IPs opleveren" \
-              "de regels hierboven noemen wat er ontbreekt"
+    hsci_fail "the port map doesn't match what the IPs produce" \
+              "the rules above name what is missing"
 }
 
 #=============================================================================
-# 6. FEITEN WEGSCHRIJVEN
+# 6. WRITE OUT THE FACTS
 #=============================================================================
 
 set tx_bsc_json [list] ; foreach b $tx_bsc_list { lappend tx_bsc_json $b }
 set rx_bsc_json [list] ; foreach b $rx_bsc_list { lappend rx_bsc_json $b }
 
 set pins_json [list]
-foreach {rol d} [list tx_clk_p $txcp tx_clk_n $txcn tx_dat_p $txdp tx_dat_n $txdn \
+foreach {role d} [list tx_clk_p $txcp tx_clk_n $txcn tx_dat_p $txdp tx_dat_n $txdn \
                       rx_clk_p $rxcp rx_clk_n $rxcn rx_dat_p $rxdp rx_dat_n $rxdn] {
-    lappend pins_json "\"$rol\": [j_obj [list \
+    lappend pins_json "\"$role\": [j_obj [list \
         [j_str  pin   [dict get $d pin]] \
         [j_str  func  [dict get $d func]] \
         [j_num  bank  [dict get $d bank]] \
@@ -331,5 +331,5 @@ set out [j_obj [list \
 set fh [open $json_file w]
 puts $fh $out
 close $fh
-puts "\n  geschreven: $json_file"
-puts "\n===== KLAAR =====================================================\n"
+puts "\n  written: $json_file"
+puts "\n===== DONE ======================================================\n"

@@ -1,188 +1,190 @@
-# Demo: HSCI van pinnen tot bitstream-klaar toplevel
+# Demo: HSCI from pins to a bitstream-ready top level
 
-Eén commando:
+One command:
 
 ```bash
 uv run demo/build_demo.py --check
 ```
 
-Daar rolt een compleet, synthetiseerbaar ontwerp uit: twee High Speed SelectIO
-Wizard instanties afgeleid uit acht package pins, ADI's `axi_hsci` erop
-aangesloten, een JTAG-AXI debugmaster op een eigen klokdomein, en een AXI-Lite
-klokconverter daartussen.
+Out of that rolls a complete, synthesizable design: two High Speed SelectIO
+Wizard instances derived from eight package pins, ADI's `axi_hsci` connected to
+them, a JTAG-AXI debug master on its own clock domain, and an AXI-Lite clock
+converter in between.
 
-`uv` regelt Jinja zelf — het scriptheader is PEP 723, er is geen venv om te
-activeren.
+`uv` handles Jinja itself — the script header is PEP 723, there's no venv to
+activate.
 
 ---
 
-## Wat er gebeurt
+## What happens
 
 ```
-demo_config.json          jouw keuzes: part, 8 pinnen, klokken, rate
+demo_config.json          your choices: part, 8 pins, clocks, rate
         |
-        |  build_demo.py schrijft er een Tcl-configblok van
+        |  build_demo.py writes a Tcl config block from it
         v
 vivado/hsci_demo_gen.tcl  ---> Vivado batch
-        |                        - pin-analyse tegen de echte device database
-        |                        - regelchecks (bank, byte group, DBC/QBC)
-        |                        - 2x high_speed_selectio_wiz, afgeleid
+        |                        - pin analysis against the real device database
+        |                        - rule checks (bank, byte group, DBC/QBC)
+        |                        - 2x high_speed_selectio_wiz, derived
         |                        - clk_wiz, jtag_axi, axi_clock_converter
-        |                        - port map toetsen aan de .veo
+        |                        - port map checked against the .veo
         v
-generated/hsci_facts.json  alles wat de analyse heeft opgeleverd
+generated/hsci_facts.json  everything the analysis produced
         |
-        |  build_demo.py rendert met Jinja
+        |  build_demo.py renders with Jinja
         v
-generated/hsci_phy_top.sv     PHY, poorten exact zoals axi_hsci ze wil
-generated/hsci_demo_top.sv    toplevel met klokken, JTAG-AXI, CDC, axi_hsci
-generated/hsci_demo_pins.xdc  pinnen, klokken, VCCO-eis
-generated/hsci_demo_srcs.tcl  bestandslijst voor een Vivado-project
+generated/hsci_phy_top.sv     PHY, ports exactly as axi_hsci wants them
+generated/hsci_demo_top.sv    top level with clocks, JTAG-AXI, CDC, axi_hsci
+generated/hsci_demo_pins.xdc  pins, clocks, VCCO requirement
+generated/hsci_demo_srcs.tcl  file list for a Vivado project
 ```
 
-De splitsing is niet willekeurig: alles waarvoor je de device database nodig
-hebt gebeurt in Tcl binnen Vivado, al het genereren van tekst in Python. De
-analyseprocs komen uit [`scripts/hsci_hssio_lib.tcl`](../scripts/hsci_hssio_lib.tcl),
-dezelfde motor als de generator in `scripts/`.
+The split isn't arbitrary: everything that needs the device database happens
+in Tcl inside Vivado, all the text generation in Python. The analysis procs
+come from [`scripts/hsci_hssio_lib.tcl`](../scripts/hsci_hssio_lib.tcl), the
+same engine as the generator in `scripts/`.
 
-## De pinout
+## The pinout
 
-Overgenomen uit [`docs/hssio_for_demo.txt`](../docs/hssio_for_demo.txt), maar
-niet overgetypt: `build_demo.py` krijgt alleen de acht package pins en leidt
-bank, byte group, nibble, bitslice-index en de complete port map zelf af.
+Taken from [`docs/hssio_for_demo.txt`](../docs/hssio_for_demo.txt), but not
+retyped: `build_demo.py` is given only the eight package pins and derives
+bank, byte group, nibble, bitslice index and the complete port map itself.
 
-| | wizard-pin | package | PIN_FUNC | nibble | bsc |
+| | wizard pin | package | PIN_FUNC | nibble | bsc |
 |---|---|---|---|---|---|
 | TX clk fwd | `BYTE0_PIN4/5` | R26/P26 | `IO_L3P_T0L_N4_AD15P_69` | byte0**L** | 0 |
 | TX data | `BYTE0_PIN10/11` | M27/M28 | `IO_L6P_T0U_N10_AD6P_69` | byte0**U** | 1 |
 | RX data | `BYTE3_PIN2/3` | D20/C21 | `IO_L20P_T3L_N2_AD1P_70` | byte3**L** | 6 |
 | RX strobe | `BYTE3_PIN6/7` | C20/B21 | `IO_L22P_T3U_N6_DBC_AD0P_70` | byte3**U** | 7 |
 
-Let op de RX-kant: strobe en data zitten in **verschillende nibbles**. Dat mag,
-want C20 is een DBC-pin en *dual byte clock* betekent dat hij beide nibbles van
-zijn byte group klokt (QBC haalt er vier, over twee byte groups). Gevolg is wel
-dat zowel de TX- als de RX-instantie twee `BITSLICE_CONTROL`s krijgt; de
-gegenereerde PHY AND't hun `dly_rdy`/`vtc_rdy` naar de twee statuslijnen die
-`axi_hsci` verwacht.
+Note the RX side: strobe and data are in **different nibbles**. That's
+allowed, because C20 is a DBC pin and *dual byte clock* means it clocks both
+nibbles of its byte group (QBC reaches four, across two byte groups). The
+consequence is that both the TX and the RX instance get two
+`BITSLICE_CONTROL`s; the generated PHY ANDs their `dly_rdy`/`vtc_rdy` into the
+two status lines that `axi_hsci` expects.
 
-## De klokken
+## The clocks
 
-Eén differentiële systeemklok van 200 MHz komt binnen op H20/H21 (GC-pin in
-bank 70). De MMCM maakt daar twee klokken van:
+One differential 200 MHz system clock comes in on H20/H21 (a GC pin in
+bank 70). The MMCM makes two clocks from it:
 
-| klok | frequentie | waarvoor |
+| clock | frequency | for |
 |---|---|---|
-| `clk_out1` | 200 MHz | referentie voor de XPLL van **beide** wizards |
-| `clk_out2` | 100 MHz | het JTAG-AXI domein |
-| `hsci_pclk` | 200 MHz | uit de XPLL van de TX-wizard, = datarate/8 |
+| `clk_out1` | 200 MHz | reference for the XPLL of **both** wizards |
+| `clk_out2` | 100 MHz | the JTAG-AXI domain |
+| `hsci_pclk` | 200 MHz | from the TX wizard's XPLL, = data rate/8 |
 
-De JTAG-AXI draait expres op `clk_out2` en niet op `hsci_pclk`. Dat is het punt
-van de demo: je debugmaster hangt aan een vrijlopende klok, en
-`axi_clock_converter` doet de overgang naar `hsci_pclk` voordat het bij
-`axi_hsci` aankomt. Hing je hem rechtstreeks aan `hsci_pclk`, dan verlies je je
-debugpad precies op het moment dat je het nodig hebt — als de XPLL uit lock
-gaat.
+The JTAG-AXI deliberately runs on `clk_out2` and not on `hsci_pclk`. That's
+the point of the demo: your debug master hangs off a free-running clock, and
+`axi_clock_converter` does the crossing to `hsci_pclk` before it reaches
+`axi_hsci`. If you hung it directly off `hsci_pclk`, you'd lose your debug
+path at exactly the moment you need it — when the XPLL drops out of lock.
 
-Resets komen van ADI's `ad_rst`, één per klokdomein: het AXI-domein komt los
-zodra de MMCM lockt, het `hsci_pclk`-domein zodra ook beide XPLLs locken.
+Resets come from ADI's `ad_rst`, one per clock domain: the AXI domain
+deasserts as soon as the MMCM locks, the `hsci_pclk` domain once both XPLLs
+have also locked.
 
-### Eén consequentie om te weten
+### One consequence worth knowing
 
-`axi_hsci` op `hsci_pclk` zetten betekent dat het register `HSCI_RATE_CTRL[8]`
-(`hsci_pll_reset`) de klok wegneemt waarop `axi_hsci` zelf loopt. Schrijf je die
-bit op 1, dan krijg je hem niet meer op 0 — alleen een nieuwe bitstream helpt.
-Uit reset staat de bit op 0 (`hsci_master_regs_regs.sv:366`), dus opstarten gaat
-goed. Wil je die bit echt kunnen bedienen, geef `axi_hsci` dan een eigen
-`s_axi_aclk` en laat de CDC die er al in zit het werk doen — dan is de externe
-`axi_clock_converter` overbodig.
+Putting `axi_hsci` on `hsci_pclk` means the register `HSCI_RATE_CTRL[8]`
+(`hsci_pll_reset`) removes the very clock `axi_hsci` runs on. Write that bit
+to 1 and you can no longer write it back to 0 — only a new bitstream helps.
+Out of reset the bit is 0 (`hsci_master_regs_regs.sv:366`), so start-up works
+fine. If you actually want to use that bit, give `axi_hsci` its own
+`s_axi_aclk` and let the CDC it already has do the work — then the external
+`axi_clock_converter` becomes unnecessary.
 
-## Wat je zelf kunt veranderen
+## What you can change yourself
 
-Alles in `demo_config.json`. De acht pinnen, de systeemklok, de twee
-MMCM-frequenties, de rate, `PLL0_RX_EXTERNAL_CLK_TO_DATA`, de IP-namen. Het
-script leidt de rest af en klaagt met een reden als een combinatie niet kan:
+Everything in `demo_config.json`. The eight pins, the system clock, the two
+MMCM frequencies, the rate, `PLL0_RX_EXTERNAL_CLK_TO_DATA`, the IP names. The
+script derives the rest and complains with a reason when a combination can't
+work:
 
 ```
-**** HSCI CONFIGURATIE ONMOGELIJK ****
+**** HSCI CONFIGURATION IMPOSSIBLE ****
 
-  reden   : RX strobe C21 is geen QBC/DBC pin (IO_L20N_T3L_N3_AD1N_70)
-  remedie : de strobe moet op het N0/N1- of N6/N7-paar van een nibble; die
-            zijn als DBC of QBC gemarkeerd in de pinnaam
+  reason : RX strobe C21 is not a QBC/DBC pin (IO_L20N_T3L_N3_AD1N_70)
+  fix    : the strobe must be on the N0/N1 or N6/N7 pair of a nibble; those
+           are marked DBC or QBC in the pin name
 ```
 
-## Twee dingen die niet kloppen met de werkelijkheid
+## Two things that don't match reality
 
-**1600 Mb/s op een -1.** `demo_config.json` staat op `"force_rate": true`. De
-`xczu17eg-ffvd1760-**1**` haalt in native mode 1250 Mb/s volgens DS925, niet
-1600. Voor genereren en synthetiseren maakt dat niets uit, voor silicon wel.
-Zet je de rate op 1250, zet dan ook `ref_freq` op 156.250 — 200 MHz staat niet
-in de lijst die de wizard bij 1250 accepteert.
+**1600 Mb/s on a -1.** `demo_config.json` has `"force_rate": true`. The
+`xczu17eg-ffvd1760-**1**` reaches 1250 Mb/s in native mode per DS925, not
+1600. For generating and synthesizing that makes no difference, for silicon
+it does. If you set the rate to 1250, also set `ref_freq` to 156.250 — 200 MHz
+is not in the list the wizard accepts at 1250.
 
-**`PLL0_RX_EXTERNAL_CLK_TO_DATA` staat op 4**, zoals in `hssio_for_demo.txt`
-(edge-aligned strobe). ADI's eigen vcu118-referentie gebruikt 3 (center-aligned).
-Dat is een eigenschap van hoe de MxFE zijn data t.o.v. `hsci_cko` uitstuurt, niet
-van de FPGA — controleer het tegen de AD9084-datasheet voor je hier een PCB op
-baseert.
+**`PLL0_RX_EXTERNAL_CLK_TO_DATA` is set to 4**, as in `hssio_for_demo.txt`
+(edge-aligned strobe). ADI's own vcu118 reference uses 3 (center-aligned).
+That's a property of how the MxFE outputs its data relative to `hsci_cko`,
+not of the FPGA — check it against the AD9084 datasheet before basing a PCB
+on it.
 
 ## ADI's sources
 
-`axi_hsci` komt uit een sparse clone onder `src/adi-hdl` (staat in
-`.gitignore`). Opnieuw ophalen:
+`axi_hsci` comes from a sparse clone under `src/adi-hdl` (in `.gitignore`).
+Fetch it again with:
 
 ```bash
 git clone --filter=blob:none --sparse --depth 1 https://github.com/analogdevicesinc/hdl.git src/adi-hdl
 cd src/adi-hdl && git sparse-checkout set library/axi_hsci library/common library/util_cdc library/scripts library/xilinx
 ```
 
-Ongeveer 3 MB in plaats van de volledige repo.
+About 3 MB instead of the full repo.
 
-## In de Vivado GUI openen
+## Opening it in the Vivado GUI
 
-De hele flow draait op `create_project -in_memory`, en dat schrijft nooit een
-`.xpr`. Wil je het ontwerp in de GUI zien, vraag er dan expliciet om:
+The whole flow runs on `create_project -in_memory`, which never writes a
+`.xpr`. If you want to see the design in the GUI, ask for it explicitly:
 
 ```bash
 uv run demo/build_demo.py --project
 vivado demo/generated/vivado_project/hsci_demo.xpr
 ```
 
-Wat je dan opent: part `xczu17eg-ffvd1760-1-e`, top `hsci_demo_top`, 79
-bronbestanden, de vijf IP's (`high_speed_selectio_wiz` 3.6 ×2, `clk_wiz` 6.0,
-`jtag_axi` 1.2, `axi_clock_converter` 2.1), de XDC, en runs `synth_1`/`impl_1`
-klaar om te starten.
+What you get: part `xczu17eg-ffvd1760-1-e`, top `hsci_demo_top`, 79 source
+files, the five IPs (`high_speed_selectio_wiz` 3.6 x2, `clk_wiz` 6.0,
+`jtag_axi` 1.2, `axi_clock_converter` 2.1), the XDC, and runs `synth_1`/
+`impl_1` ready to launch.
 
-De IP's blijven staan waar `build_demo.py` ze heeft gezet (`generated/.srcs/`);
-het project verwijst ernaar in plaats van ze te kopiëren. Eén waarheid dus — pas
-je `demo_config.json` aan en draai je opnieuw, dan ziet het project dat. De
-keerzijde: wijzig je iets in de GUI, dan overschrijft de volgende run het weer.
-De bron is `demo_config.json` en `templates/`, niet het project.
+The IPs stay where `build_demo.py` put them (`generated/.srcs/`); the project
+references them instead of copying them. One source of truth, then — adjust
+`demo_config.json` and rerun, and the project sees it. The flip side: change
+something in the GUI and the next run overwrites it. The source is
+`demo_config.json` and `templates/`, not the project.
 
-`--project` combineert met de rest, dus dit is de complete gang van nul af:
+`--project` combines with the rest, so this is the complete run from scratch:
 
 ```bash
 uv run demo/build_demo.py --clean --project --check
 ```
 
-## Losse onderdelen draaien
+## Running individual parts
 
 ```bash
-uv run demo/build_demo.py --skip-vivado    # alleen opnieuw renderen uit hsci_facts.json
-uv run demo/build_demo.py --check          # genereren en daarna synthetiseren
-uv run demo/build_demo.py --clean --check  # schone build van nul af
-uv run demo/build_demo.py --project        # .xpr voor de GUI
-uv run demo/build_demo.py --clean-only     # alleen generated/ weggooien
-uv run demo/build_demo.py --vivado <pad>   # als vivado niet in PATH staat
+uv run demo/build_demo.py --skip-vivado    # only re-render from hsci_facts.json
+uv run demo/build_demo.py --check          # generate and then synthesize
+uv run demo/build_demo.py --clean --check  # clean build from scratch
+uv run demo/build_demo.py --project        # .xpr for the GUI
+uv run demo/build_demo.py --clean-only     # only delete generated/ and __pycache__
+uv run demo/build_demo.py --vivado <path>  # if vivado isn't on PATH
 ```
 
-`--clean` gooit `generated/` in zijn geheel weg: de RTL, de XDC,
-`hsci_facts.json`, `demo_cfg.tcl`, de logs, en de Vivado-mappen `.srcs/`,
-`.gen/` en `.Xil/` met de vijf IP's erin — bij elkaar zo'n 58 MB. Wat blijft
-staan is bron en geen resultaat: `demo_config.json`, `templates/`, `vivado/`,
-en `src/adi-hdl` (dat is een clone, niet iets wat dit script maakt).
+`--clean` deletes `generated/` entirely: the RTL, the XDC, `hsci_facts.json`,
+`demo_cfg.tcl`, the logs, and the Vivado directories `.srcs/`, `.gen/` and
+`.Xil/` with the five IPs in them — about 58 MB altogether. It also removes
+`demo/__pycache__`, the bytecode cache Python leaves behind. What stays is
+source, not output: `demo_config.json`, `templates/`, `vivado/`, and
+`src/adi-hdl` (that's a clone, not something this script produces).
 
-`--clean` samen met `--skip-vivado` wordt geweigerd voordat er iets verdwijnt —
-die combinatie gooit juist de `hsci_facts.json` weg waar `--skip-vivado` uit
-zou renderen.
+`--clean` together with `--skip-vivado` is refused before anything
+disappears — that combination would delete the very `hsci_facts.json` that
+`--skip-vivado` renders from.
 
-Het volledige Vivado-log staat altijd in `generated/gen.log` en
-`generated/check.log`; op de terminal komen alleen de kopregels.
+The full Vivado log always lands in `generated/gen.log` and
+`generated/check.log`; the terminal only shows the headline lines.

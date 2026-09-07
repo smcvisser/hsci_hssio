@@ -1,9 +1,9 @@
 ###############################################################################
 ##  hsci_demo_project.tcl
 ##
-##  Maakt een echt Vivado-project op schijf van de gegenereerde bestanden, zodat
-##  je het in de GUI kunt openen. De rest van de demo draait op
-##  `create_project -in_memory`, en dat schrijft per definitie geen .xpr.
+##  Creates a real Vivado project on disk from the generated files, so you can
+##  open it in the GUI. The rest of the demo runs on `create_project -in_memory`,
+##  which by definition never writes a .xpr.
 ##
 ##      vivado -mode batch -source hsci_demo_project.tcl -tclargs <part> <gen_dir>
 ##
@@ -11,10 +11,10 @@
 ##
 ##      vivado <gen_dir>/vivado_project/hsci_demo.xpr
 ##
-##  De IP's worden met read_ip op hun plek gelaten (in generated/.srcs), niet
-##  gekopieerd: een kopie zou stilletjes uit de pas gaan lopen met wat
-##  build_demo.py genereert. Het project is dus een venster op de gegenereerde
-##  bestanden, geen tweede waarheid.
+##  The IPs are left in place with read_ip (in generated/.srcs), not copied: a
+##  copy would silently drift out of sync with what build_demo.py generates.
+##  The project is therefore a window onto the generated files, not a second
+##  source of truth.
 ###############################################################################
 
 set part_name [lindex $argv 0]
@@ -23,13 +23,13 @@ set proj_dir  [file join $gen_dir vivado_project]
 set proj_name "hsci_demo"
 
 if {![file exists [file join $gen_dir hsci_demo_srcs.tcl]]} {
-    puts "  hsci_demo_srcs.tcl niet gevonden in $gen_dir -- draai eerst build_demo.py"
+    puts "  hsci_demo_srcs.tcl not found in $gen_dir -- run build_demo.py first"
     return
 }
 
-puts "\n===== PROJECT AANMAKEN =========================================="
+puts "\n===== CREATING PROJECT =========================================="
 puts "  part : $part_name"
-puts "  map  : $proj_dir"
+puts "  dir  : $proj_dir"
 
 create_project $proj_name $proj_dir -part $part_name -force
 source [file join $gen_dir hsci_demo_srcs.tcl]
@@ -38,13 +38,13 @@ set_property top hsci_demo_top [current_fileset]
 update_compile_order -fileset sources_1
 
 puts "\n  top        : [get_property top [current_fileset]]"
-puts "  bronnen    : [llength [get_files -of_objects [get_filesets sources_1]]] bestanden"
+puts "  sources    : [llength [get_files -of_objects [get_filesets sources_1]]] files"
 puts "  IP         : [join [get_ips] {, }]"
 puts "  constraints: [llength [get_files -of_objects [get_filesets constrs_1]]]"
 
 set xpr [file join $proj_dir ${proj_name}.xpr]
 close_project
 
-puts "\nok  project geschreven"
-puts "    open het met:  vivado $xpr"
-puts "\n===== KLAAR =====================================================\n"
+puts "\nok  project written"
+puts "    open it with:  vivado $xpr"
+puts "\n===== DONE ======================================================\n"

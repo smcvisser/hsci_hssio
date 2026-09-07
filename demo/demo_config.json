@@ -1,13 +1,13 @@
 {
   "_comment": [
-    "Alles wat je voor de demo kunt kiezen. build_demo.py leest dit, geeft het",
-    "door aan Vivado, en rendert er de RTL uit.",
+    "Everything you can choose for the demo. build_demo.py reads this, passes",
+    "it to Vivado, and renders the RTL from it.",
     "",
-    "De acht HSCI-pinnen komen overeen met docs/hssio_for_demo.txt:",
-    "  TX bank 69 byte0  -> clk fwd op BYTE0_PIN4/5, data op BYTE0_PIN10/11",
-    "  RX bank 70 byte3  -> data op BYTE3_PIN2/3,    strobe op BYTE3_PIN6/7",
-    "De strobe zit in de andere nibble dan de data; dat mag omdat C20 een",
-    "DBC-pin is en die beide nibbles van zijn byte group klokt."
+    "The eight HSCI pins match docs/hssio_for_demo.txt:",
+    "  TX bank 69 byte0  -> clk fwd on BYTE0_PIN4/5, data on BYTE0_PIN10/11",
+    "  RX bank 70 byte3  -> data on BYTE3_PIN2/3,    strobe on BYTE3_PIN6/7",
+    "The strobe is in the other nibble than the data; that's allowed because",
+    "C20 is a DBC pin and clocks both nibbles of its byte group."
   ],
 
   "part": "xczu17eg-ffvd1760-1-e",
@@ -17,7 +17,7 @@
     "ref_freq": 200.0,
     "rx_clk_to_data": 4,
     "force_rate": true,
-    "_force_rate_reden": "speed grade -1 haalt in native mode 1250 Mb/s (DS925); de demo houdt 1600 aan zoals hssio_for_demo.txt, wat voor synthese prima is maar niet voor silicon",
+    "_force_rate_reason": "speed grade -1 reaches 1250 Mb/s in native mode (DS925); the demo keeps 1600 as in hssio_for_demo.txt, which is fine for synthesis but not for silicon",
 
     "tx": {
       "bank": 69,
@@ -36,7 +36,7 @@
   },
 
   "clocking": {
-    "_comment": "Een differentiele systeemklok op een GC-pin; de MMCM maakt daar de XPLL-referentie en een onafhankelijke AXI-klok uit.",
+    "_comment": "A differential system clock on a GC pin; the MMCM derives the XPLL reference and an independent AXI clock from it.",
     "sys_clk_p": "H20", "sys_clk_n": "H21",
     "sys_clk_mhz": 200.0,
     "sys_clk_iostandard": "LVDS",
@@ -45,7 +45,7 @@
   },
 
   "axi": {
-    "_comment": "De JTAG-AXI draait expres op de MMCM-AXI-klok, niet op hsci_pclk. De axi_clock_converter zet hem over naar hsci_pclk voor axi_hsci.",
+    "_comment": "The JTAG-AXI deliberately runs on the MMCM AXI clock, not on hsci_pclk. axi_clock_converter crosses it to hsci_pclk for axi_hsci.",
     "addr_width": 18,
     "data_width": 32
   },

@@ -4,31 +4,31 @@
 # dependencies = ["jinja2>=3.1"]
 # ///
 """
-build_demo.py -- het enige script dat je voor de demo hoeft te draaien.
+build_demo.py -- the only script you need to run for the demo.
 
     uv run demo/build_demo.py
 
-Wat het doet, in volgorde:
+What it does, in order:
 
-  1. demo_config.json lezen en omzetten naar een Tcl-configblok
-  2. Vivado batch draaien met vivado/hsci_demo_gen.tcl:
-       - de acht HSCI-pinnen analyseren tegen de echte device database
-       - de twee High Speed SelectIO Wizard instanties afleiden en aanmaken
-       - de MMCM, de JTAG-AXI master en de AXI-Lite klokconverter aanmaken
-       - de voorspelde port map toetsen aan de gegenereerde .veo
-       - alle feiten wegschrijven als generated/hsci_facts.json
-  3. uit die feiten met Jinja de RTL renderen:
-       - hsci_phy_top.sv    de PHY met exact de poorten die ADI's axi_hsci wil
-       - hsci_demo_top.sv   toplevel met klokken, JTAG-AXI, CDC en axi_hsci
-       - hsci_demo_pins.xdc pinnen, klokken en de VCCO-eis
-       - hsci_demo_srcs.tcl de bestandslijst voor Vivado
+  1. read demo_config.json and turn it into a Tcl config block
+  2. run Vivado batch with vivado/hsci_demo_gen.tcl:
+       - analyze the eight HSCI pins against the real device database
+       - derive and create the two High Speed SelectIO Wizard instances
+       - create the MMCM, the JTAG-AXI master and the AXI-Lite clock converter
+       - check the predicted port map against the generated .veo
+       - write out all the facts as generated/hsci_facts.json
+  3. render the RTL from those facts with Jinja:
+       - hsci_phy_top.sv    the PHY with exactly the ports ADI's axi_hsci wants
+       - hsci_demo_top.sv   top level with clocks, JTAG-AXI, CDC and axi_hsci
+       - hsci_demo_pins.xdc pins, clocks and the VCCO requirement
+       - hsci_demo_srcs.tcl the file list for Vivado
 
-Met --check draait er daarna nog een out-of-context synthese over het toplevel,
-zodat je weet dat het gegenereerde geheel ook echt elaboreert.
+With --check it then also runs an out-of-context synthesis over the top level,
+so you know the generated whole actually elaborates.
 
-    uv run demo/build_demo.py --clean --check   schone build van nul af
-    uv run demo/build_demo.py --project         maakt een .xpr voor de Vivado GUI
-    uv run demo/build_demo.py --clean-only      alleen generated/ weggooien
+    uv run demo/build_demo.py --clean --check   clean build from scratch
+    uv run demo/build_demo.py --project         makes a .xpr for the Vivado GUI
+    uv run demo/build_demo.py --clean-only      only deletes generated/ and __pycache__
 """
 
 from __future__ import annotations
@@ -51,7 +51,7 @@ ADI = REPO / "src" / "adi-hdl" / "library"
 
 
 # ---------------------------------------------------------------------------
-# Vivado vinden
+# finding Vivado
 # ---------------------------------------------------------------------------
 def find_vivado(explicit: str | None) -> str:
     if explicit:
@@ -61,45 +61,53 @@ def find_vivado(explicit: str | None) -> str:
     found = shutil.which("vivado")
     if found:
         return found
-    # Windows-installaties: C:/Xilinx/<versie>/Vivado/bin/vivado.bat
+    # Windows installs: C:/Xilinx/<version>/Vivado/bin/vivado.bat
     cands = sorted(glob.glob("C:/Xilinx/*/Vivado/bin/vivado.bat"), reverse=True)
     if cands:
         return cands[0]
     sys.exit(
-        "vivado niet gevonden. Zet $env:VIVADO of geef --vivado mee, "
-        "bijvoorbeeld C:/Xilinx/2025.1/Vivado/bin/vivado.bat"
+        "vivado not found. Set $env:VIVADO or pass --vivado, "
+        "e.g. C:/Xilinx/2025.1/Vivado/bin/vivado.bat"
     )
 
 
 # ---------------------------------------------------------------------------
-# opruimen
+# cleaning
 # ---------------------------------------------------------------------------
 def clean() -> None:
-    """Gooit generated/ weg -- alles wat dit script en Vivado erin schrijven.
+    """Deletes generated/ -- everything this script and Vivado write into it.
 
-    Dat is de RTL, de XDC, hsci_facts.json, demo_cfg.tcl, de logs, en de
-    Vivado-mappen .srcs/, .gen/ en .Xil/ met de vijf IP's erin. Blijft staan:
-    demo_config.json en templates/ (dat is bron, geen resultaat) en
-    src/adi-hdl (een clone, niet iets wat wij genereren).
+    That's the RTL, the XDC, hsci_facts.json, demo_cfg.tcl, the logs, and the
+    Vivado directories .srcs/, .gen/ and .Xil/ with the five IPs in them.
+    Also removes demo/__pycache__ (bytecode Python leaves behind).
+    Left alone: demo_config.json and templates/ (that's source, not output)
+    and src/adi-hdl (a clone, not something we generate).
     """
-    # Vangnet: nooit iets anders weggooien dan precies demo/generated.
+    # Safety net: never delete anything other than exactly demo/generated
+    # and demo/__pycache__.
     if GEN.parent != HERE or GEN.name != "generated":
-        sys.exit(f"weiger te verwijderen: {GEN} is niet demo/generated")
-    if not GEN.exists():
-        print(f"  niets te doen, {GEN.name}/ bestaat niet")
+        sys.exit(f"refusing to delete: {GEN} is not demo/generated")
+    if not GEN.exists() and not (HERE / "__pycache__").is_dir():
+        print(f"  nothing to do, {GEN.name}/ doesn't exist")
         return
 
-    files = [f for f in GEN.rglob("*") if f.is_file()]
-    mb = sum(f.stat().st_size for f in files) / 1e6
-    shutil.rmtree(GEN)
-    print(f"  weg: {GEN}  ({len(files)} bestanden, {mb:.1f} MB)")
+    if GEN.exists():
+        files = [f for f in GEN.rglob("*") if f.is_file()]
+        mb = sum(f.stat().st_size for f in files) / 1e6
+        shutil.rmtree(GEN)
+        print(f"  removed: {GEN}  ({len(files)} files, {mb:.1f} MB)")
+
+    pycache = HERE / "__pycache__"
+    if pycache.is_dir():
+        shutil.rmtree(pycache)
+        print(f"  removed: {pycache}")
 
 
 # ---------------------------------------------------------------------------
 # config -> Tcl
 # ---------------------------------------------------------------------------
 def write_tcl_config(cfg: dict, path: Path) -> None:
-    """Vivado's Tcl kent geen JSON, dus we schrijven een plat configblok."""
+    """Vivado's Tcl doesn't know JSON, so we write a flat config block."""
     hsci, tx, rx = cfg["hsci"], cfg["hsci"]["tx"], cfg["hsci"]["rx"]
     clk, axi, ips = cfg["clocking"], cfg["axi"], cfg["ip_names"]
 
@@ -128,13 +136,13 @@ def write_tcl_config(cfg: dict, path: Path) -> None:
         "ip_tx": ips["tx"], "ip_rx": ips["rx"], "ip_mmcm": ips["mmcm"],
         "ip_jtag": ips["jtag_axi"], "ip_cdc": ips["axi_cdc"],
     }
-    lines = ["# GEGENEREERD door build_demo.py -- niet met de hand aanpassen.\n"]
+    lines = ["# GENERATED by build_demo.py -- do not edit by hand.\n"]
     lines += [f"set demo({k}) {{{v}}}\n" for k, v in flat.items()]
     path.write_text("".join(lines), encoding="utf-8")
 
 
 # ---------------------------------------------------------------------------
-# Vivado draaien
+# running Vivado
 # ---------------------------------------------------------------------------
 def run_vivado(vivado: str, script: Path, args: list[str], cwd: Path, log: Path) -> None:
     cmd = [vivado, "-mode", "batch", "-nojournal", "-notrace",
@@ -146,27 +154,27 @@ def run_vivado(vivado: str, script: Path, args: list[str], cwd: Path, log: Path)
     text = log.read_text(encoding="utf-8", errors="replace")
     for line in text.splitlines():
         if line.startswith(("=====", "ok ", "  ok", "  !!", "  TX ", "  RX ",
-                            "  MMCM", "  JTAG", "  AXI ", "  WAARSCHUWING",
-                            "  gesch", "  reden", "  remedie", "ERROR", "****")):
+                            "  MMCM", "  JTAG", "  AXI ", "  WARNING",
+                            "  writ", "  reason", "  fix", "ERROR", "****")):
             print("  " + line)
     if proc.returncode != 0:
-        sys.exit(f"\nVivado faalde (exit {proc.returncode}). Volledig log: {log}")
+        sys.exit(f"\nVivado failed (exit {proc.returncode}). Full log: {log}")
 
 
 # ---------------------------------------------------------------------------
-# renderen
+# rendering
 # ---------------------------------------------------------------------------
 def render(facts: dict, cfg: dict) -> None:
     env = Environment(
         loader=FileSystemLoader(HERE / "templates"),
-        undefined=StrictUndefined,      # een typo in een template is een fout
+        undefined=StrictUndefined,      # a typo in a template is an error
         trim_blocks=True,
         lstrip_blocks=True,
         keep_trailing_newline=True,
     )
     ctx = dict(facts)
     ctx["adi_rel"] = os.path.relpath(ADI, GEN).replace("\\", "/")
-    ctx["config_note"] = cfg["hsci"].get("_force_rate_reden", "")
+    ctx["config_note"] = cfg["hsci"].get("_force_rate_reason", "")
 
     for tmpl, out in [
         ("hsci_phy_top.sv.j2", "hsci_phy_top.sv"),
@@ -176,7 +184,7 @@ def render(facts: dict, cfg: dict) -> None:
     ]:
         text = env.get_template(tmpl).render(**ctx)
         (GEN / out).write_text(text, encoding="utf-8", newline="\n")
-        print(f"  gerenderd: generated/{out}")
+        print(f"  rendered: generated/{out}")
 
 
 # ---------------------------------------------------------------------------
@@ -184,27 +192,27 @@ def main() -> None:
     ap = argparse.ArgumentParser(description=__doc__,
                                  formatter_class=argparse.RawDescriptionHelpFormatter)
     ap.add_argument("--config", default=str(HERE / "demo_config.json"))
-    ap.add_argument("--vivado", default=None, help="pad naar vivado(.bat)")
+    ap.add_argument("--vivado", default=None, help="path to vivado(.bat)")
     ap.add_argument("--skip-vivado", action="store_true",
-                    help="alleen renderen uit de bestaande generated/hsci_facts.json")
+                    help="only render from the existing generated/hsci_facts.json")
     ap.add_argument("--check", action="store_true",
-                    help="na het genereren een out-of-context synthese draaien")
+                    help="run an out-of-context synthesis after generating")
     ap.add_argument("--project", action="store_true",
-                    help="een Vivado-project op schijf zetten (.xpr) om in de GUI te openen")
+                    help="write a Vivado project to disk (.xpr) to open in the GUI")
     ap.add_argument("--clean", action="store_true",
-                    help="generated/ eerst helemaal weggooien en daarna opnieuw bouwen")
+                    help="delete generated/ and __pycache__ first, then build again")
     ap.add_argument("--clean-only", action="store_true",
-                    help="alleen generated/ weggooien en stoppen")
+                    help="only delete generated/ and __pycache__, then stop")
     args = ap.parse_args()
 
-    # Eerst weigeren, dan pas weggooien -- andersom ben je je facts.json kwijt
-    # aan een aanroep die toch afbreekt.
+    # Refuse first, delete only after -- the other way round you'd lose your
+    # facts.json to a call that aborts anyway.
     if args.clean and args.skip_vivado:
-        sys.exit("--clean en --skip-vivado gaan niet samen: --clean gooit juist "
-                 "de hsci_facts.json weg waar --skip-vivado uit rendert")
+        sys.exit("--clean and --skip-vivado don't mix: --clean deletes exactly "
+                 "the hsci_facts.json that --skip-vivado renders from")
 
     if args.clean or args.clean_only:
-        print("\n== opruimen ==")
+        print("\n== cleaning ==")
         clean()
         if args.clean_only:
             return
@@ -215,8 +223,8 @@ def main() -> None:
 
     if not args.skip_vivado:
         if not (ADI / "axi_hsci" / "axi_hsci.sv").exists():
-            sys.exit(f"ADI's axi_hsci niet gevonden onder {ADI}.\n"
-                     "Haal hem op met:\n"
+            sys.exit(f"ADI's axi_hsci not found under {ADI}.\n"
+                     "Fetch it with:\n"
                      "  git clone --filter=blob:none --sparse --depth 1 "
                      "https://github.com/analogdevicesinc/hdl.git src/adi-hdl\n"
                      "  cd src/adi-hdl && git sparse-checkout set "
@@ -225,47 +233,47 @@ def main() -> None:
 
         tcl_cfg = GEN / "demo_cfg.tcl"
         write_tcl_config(cfg, tcl_cfg)
-        print("\n== 1/3  IP genereren met Vivado ==")
+        print("\n== 1/3  generating IP with Vivado ==")
         run_vivado(find_vivado(args.vivado),
                    HERE / "vivado" / "hsci_demo_gen.tcl",
                    [str(tcl_cfg), str(facts_path)],
                    cwd=GEN, log=GEN / "gen.log")
 
     if not facts_path.exists():
-        sys.exit(f"{facts_path} bestaat niet -- draai eerst zonder --skip-vivado")
+        sys.exit(f"{facts_path} doesn't exist -- run without --skip-vivado first")
 
     facts = json.loads(facts_path.read_text(encoding="utf-8"))
-    print("\n== 2/3  RTL renderen met Jinja ==")
+    print("\n== 2/3  rendering RTL with Jinja ==")
     render(facts, cfg)
 
     if args.project:
-        print("\n== Vivado-project op schijf zetten ==")
+        print("\n== writing Vivado project to disk ==")
         run_vivado(find_vivado(args.vivado),
                    HERE / "vivado" / "hsci_demo_project.tcl",
                    [facts["part"], str(GEN)],
                    cwd=GEN, log=GEN / "project.log")
 
     if args.check:
-        print("\n== 3/3  Out-of-context synthese ==")
+        print("\n== 3/3  out-of-context synthesis ==")
         run_vivado(find_vivado(args.vivado),
                    HERE / "vivado" / "hsci_demo_check.tcl",
                    [facts["part"], str(GEN)],
                    cwd=GEN, log=GEN / "check.log")
     else:
-        print("\n== 3/3  overgeslagen (gebruik --check voor een synthesecontrole) ==")
+        print("\n== 3/3  skipped (use --check for a synthesis check) ==")
 
     xpr = GEN / "vivado_project" / "hsci_demo.xpr"
-    project_line = (f"  vivado_project/     open in de GUI met:  vivado {xpr}\n"
+    project_line = (f"  vivado_project/     open in the GUI with:  vivado {xpr}\n"
                     if args.project else
-                    "  (geen .xpr -- draai met --project als je het in de GUI wilt openen)\n")
+                    "  (no .xpr -- run with --project if you want to open it in the GUI)\n")
     print(f"""
-klaar. In {GEN}:
+done. In {GEN}:
 
-  hsci_phy_top.sv     PHY, poorten exact zoals axi_hsci ze wil
-  hsci_demo_top.sv    toplevel: MMCM, JTAG-AXI, AXI-Lite CDC, axi_hsci, PHY
-  hsci_demo_pins.xdc  pinnen en klokken
-  hsci_demo_srcs.tcl  bestandslijst; source dit in een Vivado-project
-  hsci_facts.json     wat de analyse heeft opgeleverd
+  hsci_phy_top.sv     PHY, ports exactly as axi_hsci wants them
+  hsci_demo_top.sv    top level: MMCM, JTAG-AXI, AXI-Lite CDC, axi_hsci, PHY
+  hsci_demo_pins.xdc  pins and clocks
+  hsci_demo_srcs.tcl  file list; source this in a Vivado project
+  hsci_facts.json     what the analysis produced
 {project_line}""")
 
 

@@ -1,147 +1,155 @@
 # hsci_hssio
 
-ADI's **HSCI** (High Speed Control Interface, `axi_hsci`) op een **Zynq UltraScale+**
-met de **High Speed SelectIO Wizard** (PG188), met TX en RX in verschillende HP banks.
+ADI's **HSCI** (High Speed Control Interface, `axi_hsci`) on a **Zynq UltraScale+**
+using the **High Speed SelectIO Wizard** (PG188), with TX and RX in different HP banks.
 
-ADI levert `library/axi_hsci` en een referentie-PHY voor VCU118 (Virtex US+), maar geen
-kant-en-klare oplossing voor een split-bank UltraScale+ integratie. Deze repo genereert
-die: uit een part-nummer en 8 package pins rollen twee wizard-instanties, een RTL-wrapper
-met de juiste bitslice-indices, en de bijbehorende constraints.
+ADI ships `library/axi_hsci` and a reference PHY for the VCU118 (Virtex US+), but no
+ready-made solution for a split-bank UltraScale+ integration. This repo generates
+that: from a part number and 8 package pins it derives two wizard instances, an RTL
+wrapper with the correct bitslice indices, and the matching constraints.
 
-> **Status: work in progress.** Zie [Wat werkt / wat niet](#wat-werkt--wat-niet) onderaan.
-> Het doeldevice `xczu17eg-ffvd1760-1-e` is inmiddels geverifieerd in Vivado 2025.1. De
-> volledige generatie-run is gedraaid op een `xczu7ev`, omdat daar een passende pinout
-> voor bestond; de pinout voor `ffvd1760` moet nog gekozen worden.
+> **Status: work in progress.** See [What works / what doesn't](#what-works--what-doesnt)
+> below. The target device `xczu17eg-ffvd1760-1-e` has since been verified in Vivado
+> 2025.1. The full generation run was done on an `xczu7ev`, because a matching pinout
+> existed for that part; the pinout for `ffvd1760` still needs to be chosen.
 
 ---
 
-## Doelconfiguratie
+## Language convention
+
+The chat runs in **Dutch**, switching to English whenever that is clearer.
+Everything written into the repo — code, comments, docs, commit messages — is
+in **English**.
+
+---
+
+## Target configuration
 
 | | |
 |---|---|
-| Doel-FPGA | `xczu17eg-ffvd1760-1-e` — bestaat, HP banks 65, 66, 69, 70, 71 |
+| Target FPGA | `xczu17eg-ffvd1760-1-e` — exists, HP banks 65, 66, 69, 70, 71 |
 | Slave | AD9084 / AD9088 (Apollo MxFE) |
-| Vivado | 2025.1 en 2026.1 (wizard is in beide 3.6) |
+| Vivado | 2025.1 and 2026.1 (wizard is 3.6 in both) |
 | Wizard | `high_speed_selectio_wiz` **3.6** |
-| Link rate | 1600 Mb/s gewenst — **niet haalbaar op -1**, zie [Speed grade](#speed-grade) |
+| Link rate | 1600 Mb/s desired — **not achievable on -1**, see [Speed grade](#speed-grade) |
 
 ---
 
-## Wat HSCI is
+## What HSCI is
 
-Een source-synchrone LVDS-link van 1,6 Gbps per richting die SPI vervangt als
-control-interface naar de MxFE. Vier differentiële paren:
+A source-synchronous LVDS link at 1.6 Gbps per direction that replaces SPI as the
+control interface to the MxFE. Four differential pairs:
 
-| signaal | richting | functie |
+| signal | direction | function |
 |---|---|---|
 | `hsci_ckin_p/n` | FPGA → MxFE | forwarded clock, 800 MHz @ 1600 Mb/s |
 | `hsci_din_p/n` | FPGA → MxFE | MOSI |
 | `hsci_cko_p/n` | MxFE → FPGA | strobe |
 | `hsci_do_p/n` | MxFE → FPGA | MISO |
 
-`hsci_pclk` = datarate / 8 (8:1 serdes). De forwarded clock is datarate / 2: `menc_clk`
-is in de RTL hardcoded als `8'h55` (of `8'hAA` bij `mosi_clk_inv`) — een toggle-per-bit
-patroon door dezelfde serializer.
+`hsci_pclk` = data rate / 8 (8:1 serdes). The forwarded clock is data rate / 2:
+`menc_clk` is hardcoded in the RTL as `8'h55` (or `8'hAA` with `mosi_clk_inv`) — a
+toggle-per-bit pattern through the same serializer.
 
-Zie [docs/protocol.md](docs/protocol.md) voor het wire protocol, de auto-linkup FSM en
-de register/geheugen-indeling, en [docs/observaties.md](docs/observaties.md) voor
-opmerkingen bij ADI's RTL.
+See [docs/protocol.md](docs/protocol.md) for the wire protocol, the auto-linkup FSM
+and the register/memory layout, and [docs/observations.md](docs/observations.md) for
+notes on ADI's RTL.
 
 ---
 
-## Inhoud
+## Contents
 
 ```
 demo/
-  build_demo.py          een commando: pinnen -> IP -> RTL -> synthese  (uv run)
-  demo_config.json       part, acht pinnen, klokken, rate
-  templates/             Jinja: hsci_phy_top.sv, toplevel, XDC, bestandslijst
-  vivado/                de Vivado-helft: analyse + IP + synthesecheck
+  build_demo.py          one command: pins -> IP -> RTL -> synthesis  (uv run)
+  demo_config.json       part, eight pins, clocks, rate
+  templates/             Jinja: hsci_phy_top.sv, top level, XDC, file list
+  vivado/                the Vivado half: analysis + IP + synthesis check
 scripts/
-  hsci_hssio_gen.tcl     hoofdscript: analyse -> 2 wizard IPs + wrapper + XDC
-  hsci_hssio_lib.tcl     de gedeelde motor: pin-analyse, regelchecks, IP-helpers
-  hsci_find_pins.tcl     zoekt geldige pin-combinaties op een gegeven part
-  hsci_list_parts.tcl    valideert het part, toont speed grades in dezelfde footprint
+  hsci_hssio_gen.tcl     main script: analysis -> 2 wizard IPs + wrapper + XDC
+  hsci_hssio_lib.tcl     the shared engine: pin analysis, rule checks, IP helpers
+  hsci_find_pins.tcl     finds valid pin combinations on a given part
+  hsci_list_parts.tcl    validates the part, shows speed grades in the same footprint
   hsci_pin_index.tcl     part + pin -> PKGPIN_BYTEGROUP_INDEX / PKGPIN_NIBBLE_INDEX
-  hsci_nibble.tcl        pin -> fysieke nibble (BITSLICE_CONTROL-site) uit de device DB
-  hsci_check_wrapper.tcl synthetiseert de gegenereerde wrapper tegen de gegenereerde IP
-  hsci_probe_wizard.tcl  dumpt wizard-versie en CONFIG-properties
+  hsci_nibble.tcl        pin -> physical nibble (BITSLICE_CONTROL site) from the device DB
+  hsci_check_wrapper.tcl synthesizes the generated wrapper against the generated IP
+  hsci_probe_wizard.tcl  dumps wizard version and CONFIG properties
 rtl/
-  hsci_top.sv            koppelt axi_hsci aan de gegenereerde PHY (AXI4-Lite in, pads uit)
+  hsci_top.sv            connects axi_hsci to the generated PHY (AXI4-Lite in, pads out)
 reference/
-  hsci_phy_top.sv        ADI's VCU118 PHY-wrapper (bron van de port-map afleiding)
-  versal_hsci_phy.tcl    ADI's Versal variant, ter vergelijking
+  hsci_phy_top.sv        ADI's VCU118 PHY wrapper (source of the port-map derivation)
+  versal_hsci_phy.tcl    ADI's Versal variant, for comparison
 docs/
   protocol.md            HSCI wire protocol, linkup, registers
-  observaties.md         bevindingen in ADI's RTL
-  vivado-bevindingen.md  wat er empirisch uit Vivado 2025.1 en 2026.1 kwam
-  hssio_for_demo.txt     de wizard-config waar de demo op teruggaat
+  observations.md        findings in ADI's RTL
+  vivado-findings.md     what came out empirically from Vivado 2025.1 and 2026.1
+  hssio_for_demo.txt     the wizard config the demo is based on
 ```
 
-Gegenereerd (staat in `.gitignore`): `hsci_phy_2bank.sv`, `hsci_phy_pins.xdc`,
-`demo/generated/`, en `src/adi-hdl/` (sparse clone van ADI's HDL).
+Generated (in `.gitignore`): `hsci_phy_2bank.sv`, `hsci_phy_pins.xdc`,
+`demo/generated/`, and `src/adi-hdl/` (sparse clone of ADI's HDL).
 
 ---
 
 ## Demo
 
-Een compleet ontwerp uit een commando:
+A complete design from one command:
 
 ```bash
 uv run demo/build_demo.py --check
 ```
 
-Acht package pinnen in, en eruit rolt: twee wizard-instanties, een PHY met exact de
-poorten die `axi_hsci` wil, een toplevel met MMCM-klokken, een JTAG-AXI debugmaster op
-een eigen klokdomein, een AXI-Lite klokconverter naar `hsci_pclk`, en de XDC. Met
-`--check` synthetiseert hij het geheel ook nog (7060 cellen op een `xczu17eg`).
+Eight package pins in, and out comes: two wizard instances, a PHY with exactly the
+ports `axi_hsci` wants, a top level with MMCM clocks, a JTAG-AXI debug master on its
+own clock domain, an AXI-Lite clock converter to `hsci_pclk`, and the XDC. With
+`--check` it also synthesizes the whole thing (7060 cells on an `xczu17eg`).
 
-Zie [demo/README.md](demo/README.md).
+See [demo/README.md](demo/README.md).
 
 ---
 
-## Gebruik
+## Usage
 
-**1 — part controleren en speed grades zien**
+**1 — check the part and see speed grades**
 
 ```bash
 vivado -mode batch -source scripts/hsci_list_parts.tcl
 ```
 
-**2 — geldige pinnen zoeken** (of sla over als je pinout al vastligt)
+**2 — find valid pins** (or skip this if your pinout is already fixed)
 
 ```bash
 vivado -mode batch -source scripts/hsci_find_pins.tcl -tclargs xczu17eg-ffvd1760-1-e 4
 ```
 
-Print kant-en-klare `set cfg(...)` regels.
+Prints ready-to-paste `set cfg(...)` lines.
 
-**3 — genereren**
+**3 — generate**
 
-Vul het configblok bovenin `scripts/hsci_hssio_gen.tcl` en draai:
+Fill in the config block at the top of `scripts/hsci_hssio_gen.tcl` and run:
 
 ```bash
 vivado -mode batch -source scripts/hsci_hssio_gen.tcl
 ```
 
-Zet `cfg(probe_only) 1` om alleen te analyseren en de voorspelde port map te zien.
+Set `cfg(probe_only) 1` to only analyze and see the predicted port map.
 
-**4 — de wrapper laten synthetiseren**
+**4 — synthesize the wrapper**
 
 ```bash
 vivado -mode batch -source scripts/hsci_check_wrapper.tcl -tclargs xczu17eg-ffvd1760-1-e
 ```
 
-Draait `synth_design` out-of-context op `hsci_phy_2bank` met de twee gegenereerde IPs
-erbij. De poortcheck in de generator vergelijkt alleen namen met de `.veo`; dit is de
-echte proef.
+Runs `synth_design` out-of-context on `hsci_phy_2bank` together with the two
+generated IPs. The port check in the generator only compares names against the
+`.veo`; this is the real test.
 
 ---
 
-## Pin → fysieke nibble
+## Pin → physical nibble
 
-`scripts/hsci_nibble.tcl` vertaalt een package pin naar het stuk silicium eronder, uit de
-device database in plaats van uit een regex op `PIN_FUNC`:
+`scripts/hsci_nibble.tcl` translates a package pin to the piece of silicon underneath
+it, from the device database instead of a regex on `PIN_FUNC`:
 
 ```bash
 vivado -mode batch -source scripts/hsci_nibble.tcl \
@@ -153,7 +161,7 @@ vivado -mode batch -source scripts/hsci_nibble.tcl \
   bank 65   byte 2   nibble U   N6   bsc5
   iob            IOB_X0Y84
   bitslice       BITSLICE_RX_TX_X0Y84
-  bsc_site       BITSLICE_CONTROL_X0Y13     <- de fysieke nibble
+  bsc_site       BITSLICE_CONTROL_X0Y13     <- the physical nibble
   nibble_global  13
   riu_or         RIU_OR_X0Y6
   pll_select     PLL_SELECT_SITE_X0Y13
@@ -161,7 +169,7 @@ vivado -mode batch -source scripts/hsci_nibble.tcl \
   clk_cap        QBC
 ```
 
-Zonder pinnamen dumpt hij de complete nibble-indeling van elke HP bank. Als library:
+Without pin names it dumps the complete nibble layout of every HP bank. As a library:
 
 ```tcl
 set hsci_nibble_library 1
@@ -170,92 +178,95 @@ hsci_nib_load_device xczu17eg-ffvd1760-1-e
 dict get [hsci_nibble_of_pin AP18] bsc_site
 ```
 
-De proc kruist zijn uitkomst elke aanroep tegen `PIN_FUNC`, `PKGPIN_BYTEGROUP_INDEX` en
-`PKGPIN_NIBBLE_INDEX`; afwijkingen komen in `warnings` te staan in plaats van stil een
-verkeerde `bscN` op te leveren. Zie [docs/vivado-bevindingen.md](docs/vivado-bevindingen.md)
-voor de gemeten sitestructuur waar dit op rust.
+The proc cross-checks its result on every call against `PIN_FUNC`,
+`PKGPIN_BYTEGROUP_INDEX` and `PKGPIN_NIBBLE_INDEX`; discrepancies end up in
+`warnings` instead of silently producing a wrong `bscN`. See
+[docs/vivado-findings.md](docs/vivado-findings.md) for the measured site
+structure this rests on.
 
-### Alleen de twee indices
+### Just the two indices
 
-Heb je genoeg aan wat Vivado zelf al weet, dan is `scripts/hsci_pin_index.tcl` het hele
-verhaal — één proc, geen afleiding:
+If what Vivado already knows is enough for you, `scripts/hsci_pin_index.tcl` is the
+whole story — one proc, no derivation:
 
 ```tcl
 source scripts/hsci_pin_index.tcl
 hsci_pin_index xczu17eg-ffvd1760-1-e AP18    ;# bytegroup 6 nibble 0
 ```
 
-| property | betekenis |
+| property | meaning |
 |---|---|
-| `PKGPIN_BYTEGROUP_INDEX` | 0..12, positie in de byte group — de `N` uit `PIN_FUNC` |
-| `PKGPIN_NIBBLE_INDEX` | 0..6, positie in de nibble |
+| `PKGPIN_BYTEGROUP_INDEX` | 0..12, position in the byte group — the `N` from `PIN_FUNC` |
+| `PKGPIN_NIBBLE_INDEX` | 0..6, position in the nibble |
 
-Kosten: `get_package_pins` geeft **niets** tot `link_design` de device database heeft
-geladen, en dat kost eenmalig ~14 s op een `xczu17eg`. Daarna is een aanroep 0,9 ms en
-kost het uitlezen van alle 1760 pinnen van het package 113 ms. De proc onthoudt daarom
-welk part geladen is en doet `link_design` hooguit één keer per Vivado-sessie.
+Cost: `get_package_pins` returns **nothing** until `link_design` has loaded the device
+database, which costs about 14 s once on an `xczu17eg`. After that, a call takes
+0.9 ms, and reading out all 1760 pins of the package takes 113 ms. The proc therefore
+remembers which part is loaded and runs `link_design` at most once per Vivado session.
 
 ---
 
-## Pin-regels
+## Pin rules
 
-Het script controleert deze en faalt met de reden erbij:
+The script checks these and fails with the reason attached:
 
-1. Alle vier de paren in een **HP bank** (`BT_HIGH_PERFORMANCE`). HD banks hebben geen BITSLICE.
-2. **RX strobe en RX data in dezelfde byte group**, met de strobe op een **DBC- of
-   QBC-pin** (N0/N1 of N6/N7). Dezelfde *nibble* hoeft niet: DBC = dual byte clock en
-   klokt beide nibbles van zijn byte group, QBC = quad byte clock en haalt er vier.
-   Zitten strobe en data in verschillende nibbles, dan krijgt de RX-instantie twee
-   `BITSLICE_CONTROL`s en dus twee sets bsc-poorten.
-3. **TX clkfwd en TX data in dezelfde byte group.**
-4. `VCCO = 1.8V` op beide banks (LVDS in HP banks). Niet controleerbaar vanuit Vivado —
-   staat als comment in de gegenereerde XDC.
+1. All four pairs in an **HP bank** (`BT_HIGH_PERFORMANCE`). HD banks have no BITSLICE.
+2. **RX strobe and RX data in the same byte group**, with the strobe on a **DBC or
+   QBC pin** (N0/N1 or N6/N7). The same *nibble* is not required: DBC = dual byte
+   clock and clocks both nibbles of its byte group, QBC = quad byte clock and reaches
+   four. If strobe and data are in different nibbles, the RX instance gets two
+   `BITSLICE_CONTROL`s and thus two sets of bsc ports.
+3. **TX clkfwd and TX data in the same byte group.**
+4. `VCCO = 1.8V` on both banks (LVDS in HP banks). Not checkable from Vivado —
+   noted as a comment in the generated XDC.
 
 ---
 
 ## Port map
 
-De poortnamen van de wizard zijn mechanisch afleidbaar. Regel, afgeleid uit ADI's
-VCU118-combinatie en **empirisch bevestigd op Vivado 2025.1 en 2026.1, wizard 3.6**:
+The wizard's port names can be derived mechanically. Rule, derived from ADI's
+VCU118 combination and **empirically confirmed on Vivado 2025.1 and 2026.1, wizard
+3.6**:
 
 ```
-pad-poort         = SIGNAL_NAME                          (met APPEND_PIN_NO = 0)
+pad port          = SIGNAL_NAME                          (with APPEND_PIN_NO = 0)
 fabric TX         = data_from_fabric_<SIGNAL_NAME>
 fabric RX         = data_to_fabric_<SIGNAL_NAME>
 bitslice control  = {dly_rdy,vtc_rdy,en_vtc}_bsc<byte*2 + nibble>
-per-slice FIFO    = {fifo_rd_clk,fifo_rd_en,fifo_empty}_<byte*13 + pinindex>
+per-slice FIFO    = {fifo_rd_clk,fifo_rd_en,fifo_empty}_<byte*13 + pin index>
 PLL / reset       = clk, rst, pll0_locked, pll0_clkout0, rst_seq_done
 ```
 
-Verificatie: RX strobe op byte2 N6, data op N8 gaf `dly_rdy_bsc5` (2·2+1) en
-`fifo_rd_en_32` / `fifo_rd_en_34` (2·13+6 en +8). Exact zoals voorspeld.
+Verification: RX strobe on byte2 N6, data on N8 gave `dly_rdy_bsc5` (2·2+1) and
+`fifo_rd_en_32` / `fifo_rd_en_34` (2·13+6 and +8). Exactly as predicted.
 
-De wizard levert daarnaast `pll0_clkout1` en `shared_pll0_clkoutphy_out`; die laat de
-wrapper onaangesloten.
+The wizard also delivers `pll0_clkout1` and `shared_pll0_clkoutphy_out`; the wrapper
+leaves those unconnected.
 
-Het script toetst zijn eigen voorspelling na generatie tegen de `.veo` template en
-meldt afwijkingen.
+The script checks its own prediction after generation against the `.veo` template
+and reports any discrepancies.
 
 ---
 
-## Twee banks, één klok
+## Two banks, one clock
 
-TX en RX in verschillende banks betekent twee XPLLs. `hsci_pclk` komt van de **TX** PLL,
-en die klok gaat ook naar `fifo_rd_clk` van de RX-instantie.
+TX and RX in different banks means two XPLLs. `hsci_pclk` comes from the **TX** PLL,
+and that clock also goes to `fifo_rd_clk` of the RX instance.
 
-Dat is correct by construction: de MxFE leidt `hsci_cko` af van onze `hsci_ckin`, dus de
-schrijfzijde van de RX bitslice-FIFO loopt op (een vertraagde versie van) de TX-PLL-klok.
-Schrijf- en leeszijde zijn daarmee mesochroon — zelfde frequentie, vaste onbekende fase.
-De 8-diepe FIFO vangt alleen die fase op. Geen echte CDC nodig.
+That's correct by construction: the MxFE derives `hsci_cko` from our `hsci_ckin`, so
+the write side of the RX bitslice FIFO runs on (a delayed version of) the TX PLL
+clock. Write and read sides are therefore mesochronous — same frequency, fixed but
+unknown phase. The 8-deep FIFO only absorbs that phase. No real CDC needed.
 
-De RX PLL blijft nodig voor de RIU/VTC-kalibratie van zijn eigen `BITSLICE_CONTROL`.
+The RX PLL is still needed for the RIU/VTC calibration of its own `BITSLICE_CONTROL`.
 
 ---
 
 ## Speed grade
 
-De maximale rate staat in de tabel **"LVDS Native Mode Performance"** van de datasheet
-(DS925 voor Zynq US+), rij **RX DDR, RX_BITSLICE 1:8**. De RX-kant is bindend.
+The maximum rate is in the **"LVDS Native Mode Performance"** table of the datasheet
+(DS925 for Zynq US+), row **RX DDR, RX_BITSLICE 1:8**. The RX side is the binding
+constraint.
 
 | speed grade | max native |
 |---|---|
@@ -263,74 +274,76 @@ De maximale rate staat in de tabel **"LVDS Native Mode Performance"** van de dat
 | -2 | 1600 Mb/s |
 | **-1** | **1250 Mb/s** |
 
-Native mode is de juiste tabel: de wizard gebruikt `RX_BITSLICE`/`TX_BITSLICE` met
-`BITSLICE_CONTROL` en de XPLL. Component mode (zelf een `ISERDESE3` instantiëren) is een
-ander, lager pad.
+Native mode is the right table: the wizard uses `RX_BITSLICE`/`TX_BITSLICE` with
+`BITSLICE_CONTROL` and the XPLL. Component mode (instantiating an `ISERDESE3`
+yourself) is a different, lower path.
 
-> **Valkuil.** 1250 Mb/s staat op twee onafhankelijke plekken in de datasheet: als
-> component-mode plafond bij -2/-3, en als native-mode plafond bij -1. Zelfde getal,
-> andere oorzaak. Samenvattingen die "native = 1600, component = 1250" zeggen noemen
-> alleen de eerste en wekken ten onrechte de indruk dat native altijd 1600 haalt.
+> **Pitfall.** 1250 Mb/s appears in two independent places in the datasheet: as the
+> component-mode ceiling on -2/-3, and as the native-mode ceiling on -1. Same
+> number, different cause. Summaries that say "native = 1600, component = 1250"
+> only mention the first and wrongly imply that native always hits 1600.
 
-**Gevolg voor dit project:** op een `-1` is 1600 Mb/s uitgesloten. Opties:
+**Consequence for this project:** on a `-1`, 1600 Mb/s is ruled out. Options:
 
-1. `cfg(data_speed) 1250` → `hsci_pclk` 156,25 MHz, forwarded clock 625 MHz.
-   Open vraag: accepteert de AD9084 die rate? (`RG_HSCI_RATE_CTRL`, 0x8011)
-2. Een `-2` part.
+1. `cfg(data_speed) 1250` → `hsci_pclk` 156.25 MHz, forwarded clock 625 MHz.
+   Open question: does the AD9084 accept that rate? (`RG_HSCI_RATE_CTRL`, 0x8011)
+2. A `-2` part.
 
-`cfg(force_rate)` bestaat voor als de tabel te conservatief blijkt — niet om een echte
-limiet te omzeilen.
+`cfg(force_rate)` exists for when the table turns out to be too conservative — not
+to bypass a real limit.
 
 ---
 
-## Wat werkt / wat niet
+## What works / what doesn't
 
-Getest op Vivado 2025.1 met `xczu7ev-ffvf1517-2-e` (volledige run) en op het echte
-doeldevice `xczu17eg-ffvd1760-1-e` (part-, pin- en nibble-analyse):
+Tested on Vivado 2025.1 with `xczu7ev-ffvf1517-2-e` (full run) and on the actual
+target device `xczu17eg-ffvd1760-1-e` (part, pin and nibble analysis):
 
-| onderdeel | status |
+| component | status |
 |---|---|
-| part- en speed grade-analyse | werkt, ook op `xczu17eg-ffvd1760-1-e` |
-| pin-analyse (bank/byte/nibble/bsc/slice) | werkt, geverifieerd tegen `PIN_FUNC` én tegen de sites |
-| pin → fysieke nibble (`hsci_nibble.tcl`) | werkt, alle 52 pinnen van twee banks kloppen |
-| alle regelchecks + foutmeldingen | werkt |
-| pin-finder | werkt, ook op het doeldevice |
-| port-map voorspelling | **bevestigd** tegen echte `.veo` |
-| RX wizard-instantie genereren | werkt |
-| TX wizard-instantie genereren | werkt (met `BUS_DIR 0`, zie hieronder) |
-| readback-verificatie van properties | werkt, vangt stil genegeerde properties |
-| volledige run end-to-end | **groen** op `xczu7ev`, 1600 Mb/s |
-| wrapper synthetiseren (`hsci_check_wrapper.tcl`) | **nog niet gedraaid** |
+| part and speed grade analysis | works, also on `xczu17eg-ffvd1760-1-e` |
+| pin analysis (bank/byte/nibble/bsc/slice) | works, verified against `PIN_FUNC` and against the sites |
+| pin → physical nibble (`hsci_nibble.tcl`) | works, all 52 pins of two banks check out |
+| all rule checks + error messages | works |
+| pin finder | works, also on the target device |
+| port-map prediction | **confirmed** against the real `.veo` |
+| generating the RX wizard instance | works |
+| generating the TX wizard instance | works (with `BUS_DIR 0`, see below) |
+| readback verification of properties | works, catches silently ignored properties |
+| full end-to-end run | **green** on `xczu7ev`, 1600 Mb/s |
+| synthesizing the wrapper (`hsci_check_wrapper.tcl`) | **not yet run** |
 
-Twee fouten die deze ronde boven water kwamen en verholpen zijn:
+Two bugs surfaced and were fixed this round:
 
-- **`cfg(busdir_tx)` moest 0 (`TX_ONLY`) zijn, niet 3.** Met 3 zet de wizard stilzwijgend
-  `PLL0_CLK_SOURCE` op `IBUF_TO_PLL` en `PLL0_INPUT_CLK_FREQ` op 800 MHz — een instantie
-  die een externe 800 MHz klok op een bankpin verwacht in plaats van je fabric-referentie.
-  De generator leest nu elke property terug en faalt hard als de wizard er een negeert.
-- **Netnaam-botsing in de wrapper** wanneer TX en RX toevallig hetzelfde `bsc`-nummer
-  hebben (allebei bank-lokaal genummerd). De netten heten nu `tx_`/`rx_`-geprefixt.
+- **`cfg(busdir_tx)` had to be 0 (`TX_ONLY`), not 3.** With 3, the wizard silently
+  sets `PLL0_CLK_SOURCE` to `IBUF_TO_PLL` and `PLL0_INPUT_CLK_FREQ` to 800 MHz — an
+  instance that expects an external 800 MHz clock on a bank pin instead of your
+  fabric reference. The generator now reads every property back and fails hard if
+  the wizard ignores one.
+- **Net name collision in the wrapper** when TX and RX happen to have the same
+  `bsc` number (both numbered bank-locally). Nets are now prefixed `tx_`/`rx_`.
 
-### Openstaande punten
+### Open items
 
-1. **De pinout moet opnieuw.** De pinnen die in het configblok stonden horen op
-   `ffvd1760` bij MGT-banks; ze kwamen uit een ander pinout. HP banks op dit package zijn
-   **65, 66, 69, 70, 71**. `hsci_find_pins.tcl` draait nu op het echte device en geeft
-   geldige combinaties — maar de uiteindelijke keuze hangt aan de PCB.
-2. **De AD9084-kant**: accepteert die 1250 Mb/s, en wat doet `RG_HSCI_RATE_CTRL` (0x8011)
-   precies? Vraag voor de ADI FAE. Bij 1250 Mb/s moet `cfg(ref_freq)` ook mee: 200 MHz is
-   dan geen geldige referentie, 156.250 wel.
-3. **`PLL0_RX_EXTERNAL_CLK_TO_DATA = 3`** is overgenomen van ADI. Het is een eigenschap
-   van hoe de MxFE zijn data t.o.v. `hsci_cko` uitstuurt, niet van de FPGA.
-4. **Trace matching**: de auto-linkup FSM sweept alleen de TX-fase. `hsci_cko` ↔ `hsci_do`
-   moet op de PCB strak gematcht worden; daar corrigeert niets voor.
+1. **The pinout needs redoing.** The pins that were in the config block belong to
+   MGT banks on `ffvd1760`; they came from a different pinout. HP banks on this
+   package are **65, 66, 69, 70, 71**. `hsci_find_pins.tcl` now runs on the actual
+   device and returns valid combinations — but the final choice depends on the PCB.
+2. **The AD9084 side**: does it accept 1250 Mb/s, and what exactly does
+   `RG_HSCI_RATE_CTRL` (0x8011) do? A question for the ADI FAE. At 1250 Mb/s
+   `cfg(ref_freq)` also needs to change: 200 MHz is not a valid reference there,
+   156.250 is.
+3. **`PLL0_RX_EXTERNAL_CLK_TO_DATA = 3`** was copied from ADI. It's a property of
+   how the MxFE outputs its data relative to `hsci_cko`, not of the FPGA.
+4. **Trace matching**: the auto-linkup FSM only sweeps the TX phase. `hsci_cko` ↔
+   `hsci_do` must be tightly matched on the PCB; nothing corrects for that.
 
 ---
 
-## Bronnen
+## Sources
 
 - [ADI HDL `library/axi_hsci`](https://github.com/analogdevicesinc/hdl/tree/main/library/axi_hsci)
-- [ADI `ad9084_ebz` VCU118 project](https://github.com/analogdevicesinc/hdl/tree/main/projects/ad9084_ebz/vcu118) — de UltraScale+ referentie
+- [ADI `ad9084_ebz` VCU118 project](https://github.com/analogdevicesinc/hdl/tree/main/projects/ad9084_ebz/vcu118) — the UltraScale+ reference
 - [AXI HSCI Linux driver](https://developer.analog.com/docs/linux/drivers/misc/axi-hsci.html)
 - PG188 — High Speed SelectIO Wizard
 - UG571 — UltraScale Architecture SelectIO Resources

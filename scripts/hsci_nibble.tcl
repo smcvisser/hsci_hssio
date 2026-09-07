@@ -1,83 +1,85 @@
 ###############################################################################
 ##  hsci_nibble.tcl
 ##
-##  Van part + package pin naar de FYSIEKE nibble: het BITSLICE_CONTROL-site
-##  dat die pin klokt, plus de bitslice zelf, de XIPHY-byte-tile, de RIU_OR en
-##  het PLL_SELECT_SITE.
+##  From part + package pin to the PHYSICAL nibble: the BITSLICE_CONTROL site
+##  that clocks that pin, plus the bitslice itself, the XIPHY byte tile, the
+##  RIU_OR and the PLL_SELECT_SITE.
 ##
-##  Alles komt uit de device database, niets uit een naamregex. PIN_FUNC wordt
-##  alleen gebruikt voor de QBC/DBC/GC-vlaggen en als kruiscontrole -- als de
-##  device data en de pinnaam elkaar tegenspreken, staat dat in warnings.
+##  Everything comes from the device database, nothing from a name regex.
+##  PIN_FUNC is only used for the QBC/DBC/GC flags and as a cross-check -- if
+##  the device data and the pin name contradict each other, it lands in
+##  warnings.
 ##
-##  Als library:
+##  As a library:
 ##      source scripts/hsci_nibble.tcl
 ##      hsci_nib_load_device xczu17eg-ffvd1760-1-e
 ##      set d [hsci_nibble_of_pin BB21]
-##      dict get $d bsc_site        ;# BITSLICE_CONTROL_X0Y8  <- de fysieke nibble
-##      dict get $d bsc             ;# 0  <- de N in de wizard-poort dly_rdy_bscN
+##      dict get $d bsc_site        ;# BITSLICE_CONTROL_X0Y8  <- the physical nibble
+##      dict get $d bsc             ;# 0  <- the N in the wizard port dly_rdy_bscN
 ##
-##  Als script:
+##  As a script:
 ##      vivado -mode batch -source scripts/hsci_nibble.tcl \
 ##             -tclargs xczu17eg-ffvd1760-1-e BB21 AP18 AM16
 ##
-##  Zonder pinnamen dumpt hij de nibble-indeling van elke HP bank.
+##  Without pin names it dumps the nibble layout of every HP bank.
 ###############################################################################
 
 #=============================================================================
-#  De structuur waar dit op rust, gemeten op xczu17eg-ffvd1760, Vivado 2025.1:
+#  The structure this rests on, measured on xczu17eg-ffvd1760, Vivado 2025.1:
 #
-#  - Een HP bank heeft 52 IOB-sites = 4 byte groups x 13 bitslices.
-#    get_sites -of_objects [get_iobanks <n>] geeft precies die 52.
-#  - Per byte group bestaat een XIPHY_BYTE_*-tile met daarin 13 BITSLICE_RX_TX,
-#    2 BITSLICE_CONTROL, 2 PLL_SELECT_SITE en 1 RIU_OR.
-#  - De Y-nummering van BITSLICE_RX_TX is IDENTIEK aan die van de IOB-sites.
-#    Gecontroleerd op alle vijf HP banks van dit package: bank 65 IOB Y 52..103
+#  - An HP bank has 52 IOB sites = 4 byte groups x 13 bitslices.
+#    get_sites -of_objects [get_iobanks <n>] returns exactly those 52.
+#  - Per byte group there is an XIPHY_BYTE_* tile containing 13
+#    BITSLICE_RX_TX, 2 BITSLICE_CONTROL, 2 PLL_SELECT_SITE and 1 RIU_OR.
+#  - The Y numbering of BITSLICE_RX_TX is IDENTICAL to that of the IOB sites.
+#    Checked across all five HP banks of this package: bank 65 IOB Y 52..103
 #    <-> bitslice Y 52..103, bank 66 104..155, 69 260..311, 70 312..363,
-#    71 364..415. Daarom vind je de bitslice van een pin door in de
-#    XIPHY-tiles van dezelfde clock region te zoeken naar dezelfde Y.
-#  - Lage nibble = bitslice 0..5 van de byte group, hoge nibble = 6..12 (zeven,
-#    want N12 hoort bij de hoge). Dat matcht PKGPIN_NIBBLE_INDEX.
-#  - BITSLICE_CONTROL-Y loopt door over het hele device: byte0 van bank 65
-#    krijgt Y8/Y9, byte1 Y10/Y11, byte2 Y12/Y13, byte3 Y14/Y15. Die Y is dus
-#    het device-globale nibblenummer; de wizard nummert per instantie vanaf 0
-#    (bsc0..bsc7 binnen de bank).
+#    71 364..415. So you find the bitslice of a pin by searching the
+#    XIPHY tiles of the same clock region for the same Y.
+#  - Low nibble = bitslices 0..5 of the byte group, high nibble = 6..12
+#    (seven, because N12 belongs to the high one). That matches
+#    PKGPIN_NIBBLE_INDEX.
+#  - BITSLICE_CONTROL Y runs on across the whole device: byte0 of bank 65
+#    gets Y8/Y9, byte1 Y10/Y11, byte2 Y12/Y13, byte3 Y14/Y15. That Y is the
+#    device-global nibble number; the wizard numbers from 0 per instance
+#    (bsc0..bsc7 within the bank).
 #=============================================================================
 
 proc hsci_nib_fail {msg} {
     error "hsci_nibble: $msg"
 }
 
-# get_package_pins/get_sites geven NIETS terug in een kaal in-memory project;
-# de device database wordt pas geladen door link_design. Geeft terug of wij
-# het design zelf hebben aangemaakt.
+# get_package_pins/get_sites return NOTHING in a bare in-memory project;
+# the device database is only loaded by link_design. Returns whether we
+# created the design ourselves.
 proc hsci_nib_load_device {part} {
     if {[llength [current_project -quiet]] == 0} {
         create_project -in_memory -part $part
     }
     if {[llength [get_package_pins -quiet]] > 0} { return 0 }
     if {[llength [get_parts -quiet $part]] != 1} {
-        hsci_nib_fail "part '$part' is niet bekend in deze Vivado-installatie --\
- controleer de spelling of installeer de device support"
+        hsci_nib_fail "part '$part' is not known in this Vivado installation --\
+ check the spelling or install the device support"
     }
     if {[catch {link_design -part $part -name hsci_nibble} e]} {
-        hsci_nib_fail "link_design faalde voor '$part': $e"
+        hsci_nib_fail "link_design failed for '$part': $e"
     }
     if {[llength [get_package_pins -quiet]] == 0} {
-        hsci_nib_fail "link_design gelukt maar geen package pins -- is de device\
- support voor '$part' geinstalleerd?"
+        hsci_nib_fail "link_design succeeded but no package pins -- is the device\
+ support for '$part' installed?"
     }
     return 1
 }
 
-# Y-coordinaat uit een sitenaam: IOB_X0Y52 -> 52.
+# Y coordinate from a site name: IOB_X0Y52 -> 52.
 proc hsci_nib_site_y {site} {
     if {![regexp {Y(\d+)$} $site -> y]} {
-        hsci_nib_fail "kan geen Y-coordinaat uit sitenaam '$site' halen"
+        hsci_nib_fail "cannot get a Y coordinate from site name '$site'"
     }
     return $y
 }
 
-# Sites van een type in een tile, gesorteerd op Y.
+# Sites of one type in a tile, sorted by Y.
 proc hsci_nib_sites_by_y {tile type} {
     set l [list]
     foreach s [get_sites -quiet -of_objects $tile -filter "SITE_TYPE == $type"] {
@@ -88,7 +90,7 @@ proc hsci_nib_sites_by_y {tile type} {
     return $out
 }
 
-# Laagste IOB-Y van een bank. Gecached: dit is een query per bank.
+# Lowest IOB Y of a bank. Cached: this is one query per bank.
 proc hsci_nib_bank_base {bank} {
     global hsci_nib_base_cache
     if {[info exists hsci_nib_base_cache($bank)]} {
@@ -98,58 +100,58 @@ proc hsci_nib_bank_base {bank} {
     foreach s [get_sites -quiet -of_objects [get_iobanks $bank]] {
         lappend ys [hsci_nib_site_y $s]
     }
-    if {[llength $ys] == 0} { hsci_nib_fail "bank $bank heeft geen IOB-sites" }
+    if {[llength $ys] == 0} { hsci_nib_fail "bank $bank has no IOB sites" }
     set base [lindex [lsort -integer $ys] 0]
     set hsci_nib_base_cache($bank) $base
     return $base
 }
 
 #-----------------------------------------------------------------------------
-#  De hoofdproc. Geeft een dict met:
+#  The main proc. Returns a dict with:
 #
 #    pin bank bank_type pin_func
-#    iob            IOB-site van de pin
-#    bitslice       BITSLICE_RX_TX-site van de pin
-#    byte           byte group binnen de bank (0..3)
-#    slice          bitslice binnen de byte group (0..12)
-#    nibble         0 = lage (L), 1 = hoge (U)
-#    nibble_letter  L of U
-#    nibble_pos     positie binnen de nibble (0..6)
-#    bsc            nibble binnen de bank (0..7) = byte*2 + nibble
-#                   -> de N uit de wizard-poortnamen dly_rdy_bscN
-#    bsc_site       BITSLICE_CONTROL-site: DE fysieke nibble
-#    nibble_global  Y van dat site = device-globaal nibblenummer
-#    riu_or         RIU_OR-site van de byte group
-#    pll_select     PLL_SELECT_SITE van deze nibble
-#    xiphy_tile     XIPHY_BYTE-tile van de byte group
-#    hpio_tile      HPIO-tile van de pin
+#    iob            IOB site of the pin
+#    bitslice       BITSLICE_RX_TX site of the pin
+#    byte           byte group within the bank (0..3)
+#    slice          bitslice within the byte group (0..12)
+#    nibble         0 = low (L), 1 = high (U)
+#    nibble_letter  L or U
+#    nibble_pos     position within the nibble (0..6)
+#    bsc            nibble within the bank (0..7) = byte*2 + nibble
+#                   -> the N from the wizard port names dly_rdy_bscN
+#    bsc_site       BITSLICE_CONTROL site: THE physical nibble
+#    nibble_global  Y of that site = device-global nibble number
+#    riu_or         RIU_OR site of the byte group
+#    pll_select     PLL_SELECT_SITE of this nibble
+#    xiphy_tile     XIPHY_BYTE tile of the byte group
+#    hpio_tile      HPIO tile of the pin
 #    clock_region   clock region
-#    clk_cap        QBC | DBC | {} -- kan de nibble-strobe klokken
-#    is_gc          1 bij een global-clock-capable pin
-#    warnings       afwijkingen tussen device data en PIN_FUNC/PKGPIN_*
+#    clk_cap        QBC | DBC | {} -- can clock the nibble strobe
+#    is_gc          1 on a global-clock-capable pin
+#    warnings       discrepancies between device data and PIN_FUNC/PKGPIN_*
 #-----------------------------------------------------------------------------
 proc hsci_nibble_of_pin {pin} {
     set pp [get_package_pins -quiet $pin]
     if {[llength $pp] != 1} {
-        hsci_nib_fail "package pin '$pin' bestaat niet op dit package"
+        hsci_nib_fail "package pin '$pin' does not exist on this package"
     }
     set func [get_property -quiet PIN_FUNC $pp]
     set bank [get_property -quiet BANK     $pp]
 
     set iob [get_sites -quiet -of_objects $pp]
     if {[llength $iob] != 1} {
-        hsci_nib_fail "pin $pin ($func) heeft geen IO-site -- geen gebruikers-IO\
- (voeding, VREF, of niet gebond in dit package)"
+        hsci_nib_fail "pin $pin ($func) has no IO site -- not user IO\
+ (power, VREF, or not bonded in this package)"
     }
     if {![string match "IOB_*" $iob]} {
-        hsci_nib_fail "pin $pin ($func) zit op site $iob, geen IOB -- dit is geen\
- SelectIO-pin (MGT, PS of config)"
+        hsci_nib_fail "pin $pin ($func) sits on site $iob, not an IOB -- this is not\
+ a SelectIO pin (MGT, PS or config)"
     }
 
     set btype [get_property -quiet BANK_TYPE [get_iobanks $bank]]
     if {$btype ne "BT_HIGH_PERFORMANCE"} {
-        hsci_nib_fail "pin $pin zit in bank $bank en dat is een $btype bank --\
- BITSLICE en nibbles bestaan alleen in HP banks (BT_HIGH_PERFORMANCE)"
+        hsci_nib_fail "pin $pin sits in bank $bank and that is a $btype bank --\
+ BITSLICEs and nibbles only exist in HP banks (BT_HIGH_PERFORMANCE)"
     }
 
     set y     [hsci_nib_site_y $iob]
@@ -161,8 +163,8 @@ proc hsci_nibble_of_pin {pin} {
     set hpio [get_tiles -quiet -of_objects $iob]
     set cr   [get_clock_regions -quiet -of_objects $hpio]
 
-    # De XIPHY-tile van deze byte group: die met een BITSLICE_RX_TX op dezelfde
-    # Y als onze IOB. Geen aanname over de volgorde van de tiles.
+    # The XIPHY tile of this byte group: the one with a BITSLICE_RX_TX at the
+    # same Y as our IOB. No assumption about the ordering of the tiles.
     set xiphy "" ; set bitslice ""
     foreach t [get_tiles -quiet -of_objects $cr -filter "TYPE =~ *XIPHY_BYTE*"] {
         foreach s [get_sites -quiet -of_objects $t -filter "SITE_TYPE == BITSLICE_RX_TX"] {
@@ -171,9 +173,9 @@ proc hsci_nibble_of_pin {pin} {
         if {$xiphy ne ""} break
     }
     if {$xiphy eq ""} {
-        hsci_nib_fail "geen BITSLICE_RX_TX met Y=$y in de XIPHY-tiles van clock\
- region $cr -- op dit device geldt de aanname niet dat IOB en bitslice dezelfde\
- Y-nummering hebben"
+        hsci_nib_fail "no BITSLICE_RX_TX with Y=$y in the XIPHY tiles of clock\
+ region $cr -- on this device the assumption that IOB and bitslice share the\
+ same Y numbering does not hold"
     }
 
     set nibble     [expr {$slice < 6 ? 0 : 1}]
@@ -182,35 +184,35 @@ proc hsci_nibble_of_pin {pin} {
     set bscs [hsci_nib_sites_by_y $xiphy BITSLICE_CONTROL]
     set plls [hsci_nib_sites_by_y $xiphy PLL_SELECT_SITE]
     if {[llength $bscs] != 2} {
-        hsci_nib_fail "$xiphy heeft [llength $bscs] BITSLICE_CONTROL-sites,\
- verwacht 2 (een per nibble)"
+        hsci_nib_fail "$xiphy has [llength $bscs] BITSLICE_CONTROL sites,\
+ expected 2 (one per nibble)"
     }
     set bsc_site [lindex $bscs $nibble]
     set pll_site [lindex $plls $nibble]
     set riu      [get_sites -quiet -of_objects $xiphy -filter "SITE_TYPE == RIU_OR"]
 
-    # Kruiscontrole tegen PIN_FUNC en de PKGPIN_*-properties. De device data is
-    # de waarheid; een afwijking betekent dat een aanname hierboven niet klopt.
+    # Cross-check against PIN_FUNC and the PKGPIN_* properties. The device
+    # data is the truth; a discrepancy means an assumption above is wrong.
     set warn [list]
     if {[regexp {_T(\d)([LU])_N(\d+)} $func -> f_byte f_nib f_slice]} {
         if {$f_byte != $byte} {
-            lappend warn "PIN_FUNC zegt byte group $f_byte, device data zegt $byte"
+            lappend warn "PIN_FUNC says byte group $f_byte, device data says $byte"
         }
         if {[expr {$f_nib eq "U"}] != $nibble} {
-            lappend warn "PIN_FUNC zegt nibble $f_nib, device data zegt\
+            lappend warn "PIN_FUNC says nibble $f_nib, device data says\
  [expr {$nibble ? {U} : {L}}]"
         }
         if {$f_slice != $slice} {
-            lappend warn "PIN_FUNC zegt N$f_slice, device data zegt N$slice"
+            lappend warn "PIN_FUNC says N$f_slice, device data says N$slice"
         }
     }
     set pkg_bg  [get_property -quiet PKGPIN_BYTEGROUP_INDEX $pp]
     set pkg_nib [get_property -quiet PKGPIN_NIBBLE_INDEX    $pp]
     if {$pkg_bg ne "" && $pkg_bg != $slice} {
-        lappend warn "PKGPIN_BYTEGROUP_INDEX is $pkg_bg, afgeleide slice is $slice"
+        lappend warn "PKGPIN_BYTEGROUP_INDEX is $pkg_bg, derived slice is $slice"
     }
     if {$pkg_nib ne "" && $pkg_nib != $nibble_pos} {
-        lappend warn "PKGPIN_NIBBLE_INDEX is $pkg_nib, afgeleide positie is $nibble_pos"
+        lappend warn "PKGPIN_NIBBLE_INDEX is $pkg_nib, derived position is $nibble_pos"
     }
 
     return [dict create \
@@ -238,7 +240,7 @@ proc hsci_nibble_of_pin {pin} {
         warnings      $warn]
 }
 
-# Eenregelige samenvatting, voor lijsten.
+# One-line summary, for lists.
 proc hsci_nibble_line {d} {
     return [format "%-6s bank %-3s byte%s%s N%-2s bsc%-2s %-24s %-22s %s" \
         [dict get $d pin] [dict get $d bank] [dict get $d byte] \
@@ -246,7 +248,7 @@ proc hsci_nibble_line {d} {
         [dict get $d bsc_site] [dict get $d bitslice] [dict get $d pin_func]]
 }
 
-# Volledig rapport voor een enkele pin.
+# Full report for a single pin.
 proc hsci_nibble_report {d} {
     puts "\n  === [dict get $d pin] : [dict get $d pin_func] ==="
     foreach k {bank bank_type iob bitslice byte slice nibble_letter nibble_pos \
@@ -257,7 +259,7 @@ proc hsci_nibble_report {d} {
     foreach w [dict get $d warnings] { puts "    !! $w" }
 }
 
-# Alle pinnen van een bank, op fysieke volgorde.
+# All pins of a bank, in physical order.
 proc hsci_nibble_dump_bank {bank} {
     puts "\n--- bank $bank"
     set rows [list]
@@ -273,14 +275,14 @@ proc hsci_nibble_dump_bank {bank} {
 }
 
 #=============================================================================
-#  CLI -- draait alleen als dit bestand zelf met -source is aangeroepen en er
-#  -tclargs zijn. Source je het als library uit een script dat zelf -tclargs
-#  krijgt, zet dan eerst:
+#  CLI -- runs only when this file itself is invoked with -source and there
+#  are -tclargs. If you source it as a library from a script that itself gets
+#  -tclargs, set first:
 #
 #      set hsci_nibble_library 1
 #      source [file join [file dirname [info script]] hsci_nibble.tcl]
 #
-#  anders zou de CLI hieronder op de argumenten van dat script losgaan.
+#  otherwise the CLI below would run loose on that script's arguments.
 #=============================================================================
 if {![info exists hsci_nibble_library] && [info exists argv] && [llength $argv] > 0} {
     set nib_part [lindex $argv 0]
