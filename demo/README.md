@@ -164,6 +164,28 @@ something in the GUI and the next run overwrites it. The source is
 uv run demo/build_demo.py --clean --project --check
 ```
 
+## Running implementation
+
+`--check` synthesizes, but says nothing about placement, routing or timing. For
+that there is a fourth Vivado script, which runs `synth_1` and `impl_1` in batch
+so you don't need the GUI:
+
+```bash
+vivado -mode batch -source demo/vivado/hsci_demo_impl.tcl -tclargs demo/generated/vivado_project/hsci_demo.xpr 4
+```
+
+The last argument is the number of parallel jobs. It stops at `route_design`; no
+bitstream. First it prints which constraint files `link_design` is going to read
+and whether they are enabled — that matters, because the XDC of
+`high_speed_selectio_wiz` is deliberately switched off there. It duplicates the
+pin assignments from `hsci_demo_pins.xdc` and made Vivado 2025.1 crash with an
+access violation in `link_design`; everything else those files constrained has
+been moved into `hsci_demo_pins.xdc`. See
+[`docs/vivado-findings.md`](../docs/vivado-findings.md).
+
+On `xczu17eg-ffvd1760-1-e` the demo routes with WNS +1.056 ns and WHS +0.010 ns,
+7624 cells, in about thirteen minutes on four jobs.
+
 ## Running individual parts
 
 ```bash

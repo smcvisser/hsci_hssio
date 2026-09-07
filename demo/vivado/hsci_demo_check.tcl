@@ -22,7 +22,12 @@ source [file join $gen_dir hsci_demo_srcs.tcl]
 # That's the normal Vivado flow and here also the only one that works: set
 # GENERATE_SYNTH_CHECKPOINT to false to synthesize all IP HDL in one go and
 # Vivado 2025.1 crashes with EXCEPTION_ACCESS_VIOLATION while processing the
-# XDC of high_speed_selectio_wiz 3.6. See docs/vivado-findings.md.
+# XDC of high_speed_selectio_wiz 3.6.
+#
+# Note that this only keeps synthesis out of harm's way: with a DCP per IP,
+# synthesis reads the *_in_context.xdc of an IP and not its real XDC. The
+# latter does get parsed by link_design, and there the same crash returns --
+# hsci_demo_project.tcl disables it for that reason. See docs/vivado-findings.md.
 set_property GENERATE_SYNTH_CHECKPOINT true [get_files *.xci]
 set_property top hsci_demo_top [current_fileset]
 

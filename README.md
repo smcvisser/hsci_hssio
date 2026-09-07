@@ -64,7 +64,7 @@ demo/
   build_demo.py          one command: pins -> IP -> RTL -> synthesis  (uv run)
   demo_config.json       part, eight pins, clocks, rate
   templates/             Jinja: hsci_phy_top.sv, top level, XDC, file list
-  vivado/                the Vivado half: analysis + IP + synthesis check
+  vivado/                the Vivado half: analysis + IP + synthesis check + impl
 scripts/
   hsci_hssio_gen.tcl     main script: analysis -> 2 wizard IPs + wrapper + XDC
   hsci_hssio_lib.tcl     the shared engine: pin analysis, rule checks, IP helpers
