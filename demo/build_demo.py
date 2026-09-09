@@ -155,7 +155,8 @@ def run_vivado(vivado: str, script: Path, args: list[str], cwd: Path, log: Path)
     for line in text.splitlines():
         if line.startswith(("=====", "ok ", "  ok", "  !!", "  TX ", "  RX ",
                             "  MMCM", "  JTAG", "  AXI ", "  WARNING",
-                            "  writ", "  reason", "  fix", "ERROR", "****")):
+                            "  writ", "  reason", "  fix", "  disabled",
+                            "ERROR", "****")):
             print("  " + line)
     if proc.returncode != 0:
         sys.exit(f"\nVivado failed (exit {proc.returncode}). Full log: {log}")

@@ -333,7 +333,10 @@ Exit code 0xC0000005, `hs_err_pid*.log` with no stack trace. Happens both with a
 without `-mode out_of_context`, and on both `xczu17eg` and a barer design — it's tied
 to the XDC of `high_speed_selectio_wiz` 3.6.
 
-**What does work:** the normal flow, giving each IP its own checkpoint first.
+**What avoids it in synthesis:** the normal flow, giving each IP its own checkpoint
+first. That does not solve the crash, it just steps around it — see the next
+section: with per-IP checkpoints, synthesis reads only the `*_in_context.xdc` of an
+IP and never gets to the file it dies on.
 
 ```tcl
 set_property GENERATE_SYNTH_CHECKPOINT true [get_files *.xci]
@@ -356,3 +359,60 @@ The `*_in_context.xdc` that Vivado creates for the OOC synthesis of the clocking
 wizard IP defines the incoming clock with the same period but no name. In a real
 project flow, the top-level run doesn't read that file and the message goes away; in
 an in-memory check like this one you do see it.
+
+## The same crash comes back in link_design, and why
+
+Per-IP checkpoints get synthesis through, but `impl_1` then dies in its very first
+step, `init_design` → `link_design`, at the same file:
+
+```
+Parsing XDC File [.../hsci_demo_jtag_axi/constraints/jtag_axi.xdc] for cell 'i_jtag_axi/inst'
+Finished Parsing XDC File [...]
+Parsing XDC File [.../hssio_wiz_hsci_tx.xdc] for cell 'i_hsci_phy/i_hssio_tx/inst'
+Finished Parsing XDC File [...]
+Abnormal program termination (EXCEPTION_ACCESS_VIOLATION)
+```
+
+The RX wizard's XDC is never reached. `hs_err_pid*.log` again has no stack trace.
+
+**Why synthesis survives and implementation doesn't.** Compare which constraint
+files the two runs parse. `synth_1` parses eleven `*_in_context.xdc` files plus our
+own `hsci_demo_pins.xdc` — the real `hssio_wiz_hsci_tx.xdc` is not among them.
+`impl_1` does parse it. An IP's `*_in_context.xdc` is the small file Vivado writes
+for the IP's own out-of-context synthesis; the IP's real XDC only enters the flow
+when the netlist is linked. So the crash was never gone, only postponed.
+
+**What is in that file.** Besides `set_false_path`, `PHASESHIFT_MODE` and the
+analog I/O settings, the wizard XDC assigns `PACKAGE_PIN`, `IOSTANDARD` and
+`DATA_RATE` to the same eight ports as `hsci_demo_pins.xdc`. Same values — the
+wizard was configured with these pins — but assigned twice, and only at link time.
+
+**The fix:** switch the wizard's own XDC off and let `hsci_demo_pins.xdc` own all
+I/O. `hsci_demo_project.tcl` does that on IPDEF, not on name:
+
+```tcl
+foreach ip [get_ips] {
+    if {![string match *high_speed_selectio_wiz* [get_property IPDEF $ip]]} { continue }
+    set_property is_enabled false [get_files -of_objects [get_ips $ip] "*/$ip.xdc"]
+}
+```
+
+The `*_ooc.xdc` of the same IP stays enabled — that one drives the IP's own OOC
+synthesis and never reaches the top level.
+
+Everything the two files constrained beyond the duplicate pins is repeated in
+`hsci_demo_pins.xdc`, scoped by hand because there it is no longer scoped to the
+cell: `DATA_RATE DDR` on all eight pins, `LVDS_PRE_EMPHASIS FALSE` on the four TX
+pins, `EQUALIZATION EQ_LEVEL0` on the four RX pins, `PHASESHIFT_MODE LATENCY` on
+the two wizard XPLLs (a `REF_NAME =~ PLLE*_ADV` filter keeps the MMCM out), and the
+`set_false_path` to the wizards' `sync_flop_0` synchronisers (5 pins).
+
+**Result:** `hsci_demo_impl.tcl` runs synthesis and implementation through to
+`route_design Complete!` on `xczu17eg-ffvd1760-1-e`, 7624 cells, WNS +1.056 ns and
+WHS +0.010 ns. Verified afterwards on the routed checkpoint that all five
+taken-over constraints did land on real objects.
+
+Three CRITICAL WARNINGs remain, all expected: the `sys_clk` / `H20` override above,
+and twice `[Route 35-4573]` about an Xtalk aggressor on `TX_D1`/`TX_D2` of the TX
+bitslice that is not driven directly by a flop — that is how the wizard builds its
+serialiser.

@@ -37,6 +37,27 @@ source [file join $gen_dir hsci_demo_srcs.tcl]
 set_property top hsci_demo_top [current_fileset]
 update_compile_order -fileset sources_1
 
+# The XDC of high_speed_selectio_wiz sets PACKAGE_PIN, IOSTANDARD and DATA_RATE
+# on the same eight ports as hsci_demo_pins.xdc. Synthesis never sees it -- for
+# an IP it only reads the *_in_context.xdc -- but link_design does, and Vivado
+# 2025.1 dies there with EXCEPTION_ACCESS_VIOLATION. So we switch those two
+# files off and let hsci_demo_pins.xdc own all I/O; what they constrained
+# beyond the pins is repeated in there. See docs/vivado-findings.md.
+#
+# The *_ooc.xdc of the same IP stays enabled: that one drives the IP's own
+# out-of-context synthesis and never reaches the top level.
+foreach ip [get_ips] {
+    if {![string match *high_speed_selectio_wiz* [get_property IPDEF $ip]]} {
+        continue
+    }
+    set xdc [get_files -quiet -of_objects [get_ips $ip] "*/$ip.xdc"]
+    if {[llength $xdc] != 1} {
+        error "hsci_demo_project: expected one $ip.xdc, found [llength $xdc]: $xdc"
+    }
+    set_property is_enabled false $xdc
+    puts "  disabled   : [file tail $xdc]  (I/O comes from hsci_demo_pins.xdc)"
+}
+
 puts "\n  top        : [get_property top [current_fileset]]"
 puts "  sources    : [llength [get_files -of_objects [get_filesets sources_1]]] files"
 puts "  IP         : [join [get_ips] {, }]"

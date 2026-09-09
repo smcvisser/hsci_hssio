@@ -46,3 +46,34 @@ create_clock -name hsci_strobe -period {{ '%.3f'|format(1000.0 / fwd_clk_mhz) }}
 set_clock_groups -asynchronous \
   -group [get_clocks -include_generated_clocks -of_objects [get_ports {{ sys_clk_p }}]] \
   -group [get_clocks -include_generated_clocks -of_objects [get_ports {{ rx_sig_clk_p }}]]
+
+#=============================================================================
+# Taken over from the wizard IP XDCs
+#=============================================================================
+# {{ ip_tx }}.xdc and {{ ip_rx }}.xdc are disabled in the
+# implementation constraint set by hsci_demo_project.tcl: they set PACKAGE_PIN
+# and IOSTANDARD on the same eight ports as this file, and link_design dies on
+# them with EXCEPTION_ACCESS_VIOLATION. Synthesis never noticed because it only
+# reads the *_in_context.xdc of an IP. See docs/vivado-findings.md.
+#
+# Everything those two files did beyond the duplicate pin assignments is
+# repeated below, scoped by hand -- in the IP they were scoped to the cell, here
+# they are not.
+
+# Both edges: the bitslices are DDR.
+set_property DATA_RATE DDR [get_ports { {{ tx_sig_clk_p }} {{ tx_sig_clk_n }} {{ tx_sig_dat_p }} {{ tx_sig_dat_n }} \
+                                        {{ rx_sig_clk_p }} {{ rx_sig_clk_n }} {{ rx_sig_dat_p }} {{ rx_sig_dat_n }} }]
+
+# TX: no pre-emphasis.
+set_property LVDS_PRE_EMPHASIS FALSE [get_ports { {{ tx_sig_clk_p }} {{ tx_sig_clk_n }} {{ tx_sig_dat_p }} {{ tx_sig_dat_n }} }]
+
+# RX: input equalisation. DIFF_TERM_ADV is already set with the pins above.
+set_property EQUALIZATION EQ_LEVEL0 [get_ports { {{ rx_sig_clk_p }} {{ rx_sig_clk_n }} {{ rx_sig_dat_p }} {{ rx_sig_dat_n }} }]
+
+# The XPLL in each wizard has to run in LATENCY phase shift mode. The REF_NAME
+# filter keeps the MMCM of {{ ip_mmcm }} out of it.
+set_property PHASESHIFT_MODE LATENCY \
+  [get_cells -hierarchical -filter {NAME =~ i_hsci_phy/i_hssio_*x/* && REF_NAME =~ PLLE*_ADV}]
+
+# The synchronisers inside the wizards.
+set_false_path -to [get_pins -hierarchical -filter {NAME =~ i_hsci_phy/i_hssio_*x/*sync_flop_0*/D}]
